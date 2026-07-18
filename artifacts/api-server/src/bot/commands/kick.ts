@@ -25,38 +25,38 @@ export const data = new SlashCommandBuilder()
 export async function execute(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  const target = interaction.options.getMember("kullanici");
-  const sebep =
-    interaction.options.getString("sebep") ?? "Sebep belirtilmedi";
+  if (!interaction.guild) {
+    await interaction.reply({ content: "❌ Bu komut sadece sunucularda çalışır.", ephemeral: true });
+    return;
+  }
 
-  if (!(target instanceof GuildMember)) {
-    await interaction.reply({
-      content: "❌ Kullanıcı bu sunucuda bulunamadı.",
-      ephemeral: true,
-    });
+  const targetUser = interaction.options.getUser("kullanici", true);
+  const sebep = interaction.options.getString("sebep") ?? "Sebep belirtilmedi";
+
+  await interaction.deferReply();
+
+  let target: GuildMember;
+  try {
+    target = await interaction.guild.members.fetch(targetUser.id);
+  } catch {
+    await interaction.editReply("❌ Kullanıcı bu sunucuda bulunamadı.");
     return;
   }
 
   if (!target.kickable) {
-    await interaction.reply({
-      content:
-        "❌ Bu kullanıcıyı atamıyorum. Kullanıcının rolü botunkinden yüksek olabilir.",
-      ephemeral: true,
-    });
+    await interaction.editReply(
+      "❌ Bu kullanıcıyı atamıyorum. Kullanıcının rolü botunkinden yüksek olabilir.",
+    );
     return;
   }
 
   if (target.id === interaction.user.id) {
-    await interaction.reply({
-      content: "❌ Kendini atamazsın!",
-      ephemeral: true,
-    });
+    await interaction.editReply("❌ Kendini atamazsın!");
     return;
   }
 
   await target.kick(sebep);
-
-  await interaction.reply({
-    content: `✅ **${target.user.tag}** sunucudan atıldı.\n📝 Sebep: ${sebep}`,
-  });
+  await interaction.editReply(
+    `✅ **${target.user.tag}** sunucudan atıldı.\n📝 Sebep: ${sebep}`,
+  );
 }
