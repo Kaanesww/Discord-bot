@@ -1,46 +1,59 @@
-import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
-import { getUserLevel } from "../leveling";
+import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from "discord.js";
+import { getUserLevel, getRank, xpToNextLevel, xpForLevel } from "../leveling";
 
 export const data = new SlashCommandBuilder()
   .setName("level")
-  .setDescription("Seviyeni ve XP'ini gösterir")
-  .addUserOption((option) =>
-    option
-      .setName("kullanici")
-      .setDescription("Başka bir kullanıcının seviyesini görüntüle")
-      .setRequired(false),
+  .setDescription("Seviyeni ve XP istatistiklerini gösterir")
+  .addUserOption((o) =>
+    o.setName("kullanici").setDescription("Başka birinin seviyesini gör").setRequired(false),
   );
 
-export async function execute(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
-  const target = interaction.options.getUser("kullanici") ?? interaction.user;
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
-
   if (!guildId) {
     await interaction.reply({ content: "❌ Bu komut sadece sunucularda çalışır.", ephemeral: true });
     return;
   }
 
+  const target = interaction.options.getUser("kullanici") ?? interaction.user;
   await interaction.deferReply();
 
-  const data = await getUserLevel(target.id, guildId);
-  const xpForNext = xpNeeded(data.level + 1);
-  const bar = progressBar(data.xp, xpForNext);
+  const userData = await getUserLevel(target.id, guildId);
+  const rank = await getRank(target.id, guildId);
+  const { current: lvlXp, needed } = xpToNextLevel(userData.xp, userData.level);
 
-  await interaction.editReply(
-    `👤 **${target.username}** — Seviye **${data.level}**\n` +
-    `✨ XP: **${data.xp}** / ${xpForNext}\n` +
-    `${bar}`,
-  );
-}
+  const filled = Math.round((lvlXp / needed) * 12);
+  const bar = "█".repeat(filled) + "░".repeat(12 - filled);
+  const pct = Math.round((lvlXp / needed) * 100);
 
-function xpNeeded(level: number): number {
-  return 100 * level * level;
-}
+  // Sonraki 3 seviyeye ne kadar kaldığını hesapla
+  let remaining = needed - lvlXp;
+  const nextLevels: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    nextLevels.push(`**Seviye ${userData.level + i}** — ${remaining.toLocaleString()} XP sonra`);
+    remaining += xpForLevel(userData.level + i + 1);
+  }
 
-function progressBar(current: number, max: number): string {
-  const filled = Math.round((current / max) * 10);
-  const empty = 10 - filled;
-  return `[${"█".repeat(filled)}${"░".repeat(empty)}]`;
+  const embed = new EmbedBuilder()
+    .setAuthor({
+      name: target.displayName,
+      iconURL: target.displayAvatarURL({ size: 64 }),
+    })
+    .setColor(0x5865f2)
+    .setThumbnail(target.displayAvatarURL({ size: 128 }))
+    .addFields(
+      { name: "🏅 Sıra", value: `#${rank}`, inline: true },
+      { name: "⭐ Seviye", value: String(userData.level), inline: true },
+      { name: "💬 Mesaj", value: userData.messageCount.toLocaleString(), inline: true },
+      { name: "✨ Toplam XP", value: userData.xp.toLocaleString(), inline: true },
+      { name: "📊 Bu Seviyede", value: `${lvlXp.toLocaleString()} / ${needed.toLocaleString()} XP`, inline: true },
+      { name: "⚡ İlerleme", value: `${pct}%`, inline: true },
+      {
+        name: `[${bar}] %${pct}`,
+        value: nextLevels.join("\n"),
+      },
+    )
+    .setFooter({ text: "v! botu • XP her mesajda kazanılır (60 sn bekleme)" });
+
+  await interaction.editReply({ embeds: [embed] });
 }
