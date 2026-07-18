@@ -33,6 +33,7 @@ import * as warnCommand from "./commands/warn";
 import * as uyariKaldirCommand from "./commands/uyarikaldir";
 import * as sicilCommand from "./commands/sicil";
 import * as temizleCommand from "./commands/temizle";
+import * as yardimCommand from "./commands/yardim";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -44,7 +45,7 @@ for (const cmd of [
   kickCommand, levelCommand, leaderboardCommand, setPrefixCommand,
   profilCommand, levelRolCommand, banCommand, unbanCommand,
   timeoutCommand, untimeoutCommand, warnCommand, uyariKaldirCommand,
-  sicilCommand, temizleCommand,
+  sicilCommand, temizleCommand, yardimCommand,
 ]) {
   commands.set((cmd as Command).data.name, cmd as Command);
 }
@@ -174,6 +175,24 @@ const prefixHandlers: Record<string, (message: Message, args: string[]) => Promi
   temizle: handlePrefixTemizle,
   clear: handlePrefixTemizle,
   setprefix: handlePrefixSetPrefix,
+  yardim: async (m) => {
+    const prefix = m.guildId ? await getPrefix(m.guildId).catch(() => "v!") : "v!";
+    const { generateHelpCard } = await import("./helpCard");
+    const buf = await generateHelpCard(prefix);
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "yardim.png" })] });
+  },
+  yardım: async (m) => {
+    const prefix = m.guildId ? await getPrefix(m.guildId).catch(() => "v!") : "v!";
+    const { generateHelpCard } = await import("./helpCard");
+    const buf = await generateHelpCard(prefix);
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "yardim.png" })] });
+  },
+  help: async (m) => {
+    const prefix = m.guildId ? await getPrefix(m.guildId).catch(() => "v!") : "v!";
+    const { generateHelpCard } = await import("./helpCard");
+    const buf = await generateHelpCard(prefix);
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "yardim.png" })] });
+  },
 };
 
 // ─── Bot başlatma ─────────────────────────────────────────────────────────────
