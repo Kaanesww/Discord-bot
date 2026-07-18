@@ -9,11 +9,22 @@ import {
 export const data = new SlashCommandBuilder()
   .setName("nuke")
   .setDescription("Kanalı siler ve aynı ayarlarla yeniden oluşturur")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!interaction.guild || !(interaction.channel instanceof TextChannel)) {
     await interaction.reply({ content: "❌ Bu komut sadece metin kanallarında çalışır.", ephemeral: true });
+    return;
+  }
+
+  // Sadece sunucu sahibi veya yönetici kullanabilir
+  const member = interaction.guild.members.cache.get(interaction.user.id)
+    ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const isOwner = interaction.guild.ownerId === interaction.user.id;
+  const isAdmin = member?.permissions.has(PermissionFlagsBits.Administrator) ?? false;
+
+  if (!isOwner && !isAdmin) {
+    await interaction.reply({ content: "❌ Bu komutu sadece sunucu sahibi veya yöneticiler kullanabilir.", ephemeral: true });
     return;
   }
 

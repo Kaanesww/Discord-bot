@@ -196,8 +196,10 @@ const prefixHandlers: Record<string, (message: Message, args: string[]) => Promi
   },
   nuke: async (m) => {
     if (!m.guild || !(m.channel instanceof TextChannel)) return;
-    if (!m.member || !m.member.permissions.has("ManageChannels")) {
-      await m.reply("❌ **Manage Channels** iznin yok."); return;
+    const isOwner = m.guild.ownerId === m.author.id;
+    const isAdmin = m.member?.permissions.has("Administrator") ?? false;
+    if (!isOwner && !isAdmin) {
+      await m.reply("❌ Bu komutu sadece sunucu sahibi veya yöneticiler kullanabilir."); return;
     }
     const ch = m.channel;
     const { name, topic, nsfw, rateLimitPerUser, position, parentId } = ch;
