@@ -6,6 +6,7 @@ import {
   REST,
   Routes,
   AttachmentBuilder,
+  TextChannel,
   type ChatInputCommandInteraction,
   type SlashCommandBuilder,
   type Message,
@@ -14,12 +15,22 @@ import { logger } from "../lib/logger";
 import { handleXp, getUserLevel, getRank, xpToNextLevel, getLeaderboard } from "./leveling";
 import { getPrefix } from "./guildSettings";
 import { generateProfileCard } from "./profileCard";
+import { generateSicilCard } from "./sicilCard";
+import { logAction, getUserLogs } from "./moderation";
 import * as kickCommand from "./commands/kick";
 import * as levelCommand from "./commands/level";
 import * as leaderboardCommand from "./commands/leaderboard";
 import * as setPrefixCommand from "./commands/setprefix";
 import * as profilCommand from "./commands/profil";
 import * as levelRolCommand from "./commands/levelrol";
+import * as banCommand from "./commands/ban";
+import * as unbanCommand from "./commands/unban";
+import * as timeoutCommand from "./commands/timeout";
+import * as untimeoutCommand from "./commands/untimeout";
+import * as warnCommand from "./commands/warn";
+import * as uyarikaldir from "./commands/uyarikaldir";
+import * as sicilCommand from "./commands/sicil";
+import * as temizleCommand from "./commands/temizle";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -27,28 +38,50 @@ interface Command {
 }
 
 const commands = new Collection<string, Command>();
-commands.set(kickCommand.data.name, kickCommand as Command);
-commands.set(levelCommand.data.name, levelCommand as Command);
-commands.set(leaderboardCommand.data.name, leaderboardCommand as Command);
-commands.set(setPrefixCommand.data.name, setPrefixCommand as Command);
-commands.set(profilCommand.data.name, profilCommand as Command);
-commands.set(levelRolCommand.data.name, levelRolCommand as Command);
+for (const cmd of [
+  kickCommand, levelCommand, leaderboardCommand, setPrefixCommand,
+  profilCommand, levelRolCommand, banCommand, unbanCommand,
+  timeoutCommand, untimeoutCommand, warnCommand, uyarikaldir,
+  sicilCommand, temizleCommand,
+]) {
+  commands.set((cmd as Command).data.name, cmd as Command);
+}
 
-// ─── Prefix komut handler'ları ────────────────────────────────────────────────
+// ─── Prefix handler'lar ──────────────────────────────────────────────────────
 
 async function handlePrefixKick(message: Message, args: string[]): Promise<void> {
   if (!message.guild || !message.member) return;
-  if (!message.member.permissions.has("KickMembers")) {
-    await message.reply("❌ Bu komutu kullanmak için **Kick Members** iznin olmalı.");
-    return;
-  }
+  if (!message.member.permissions.has("KickMembers")) { await message.reply("❌ **Kick Members** iznin yok."); return; }
   const target = message.mentions.members?.first();
   if (!target) { await message.reply("❌ Kullanım: `kick @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
-  if (!target.kickable) { await message.reply("❌ Bu kullanıcıyı atamıyorum. Rolü botunkinden yüksek olabilir."); return; }
+  if (!target.kickable) { await message.reply("❌ Bu kullanıcıyı atamıyorum."); return; }
   if (target.id === message.author.id) { await message.reply("❌ Kendini atamazsın!"); return; }
   await target.kick(sebep);
-  await message.reply(`✅ **${target.user.tag}** sunucudan atıldı.\n📝 Sebep: ${sebep}`);
+  await logAction({ guildId: message.guildId!, userId: target.id, moderatorId: message.author.id, action: "kick", reason: sebep });
+  await message.reply(`✅ **${target.user.tag}** atıldı. Sebep: ${sebep}`);
+}
+
+async function handlePrefixBan(message: Message, args: string[]): Promise<void> {
+  if (!message.guild || !message.member) return;
+  if (!message.member.permissions.has("BanMembers")) { await message.reply("❌ **Ban Members** iznin yok."); return; }
+  const target = message.mentions.users.first();
+  if (!target) { await message.reply("❌ Kullanım: `ban @kullanici [sebep]`"); return; }
+  const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
+  await message.guild.bans.create(target.id, { reason: sebep });
+  await logAction({ guildId: message.guildId!, userId: target.id, moderatorId: message.author.id, action: "ban", reason: sebep });
+  await message.reply(`🔨 **${target.tag}** yasaklandı. Sebep: ${sebep}`);
+}
+
+async function handlePrefixWarn(message: Message, args: string[]): Promise<void> {
+  if (!message.guildId || !message.member) return;
+  if (!message.member.permissions.has("ModerateMembers")) { await message.reply("❌ **Moderate Members** iznin yok."); return; }
+  const target = message.mentions.users.first();
+  if (!target) { await message.reply("❌ Kullanım: `warn @kullanici [sebep]`"); return; }
+  const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
+  const log = await logAction({ guildId: message.guildId, userId: target.id, moderatorId: message.author.id, action: "warn", reason: sebep });
+  await message.reply(`⚠️ **${target.tag}** uyarıldı. Sebep: ${sebep} | ID: #${log.id}`);
+  try { await target.send(`⚠️ **${message.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`); } catch { /* dm kapalı */ }
 }
 
 async function handlePrefixLevel(message: Message): Promise<void> {
@@ -57,14 +90,10 @@ async function handlePrefixLevel(message: Message): Promise<void> {
   const userData = await getUserLevel(target.id, message.guildId);
   const rank = await getRank(target.id, message.guildId);
   const { current, needed } = xpToNextLevel(userData.xp, userData.level);
-  const filled = Math.round((current / needed) * 12);
-  const bar = "█".repeat(filled) + "░".repeat(12 - filled);
-  const pct = Math.round((current / needed) * 100);
+  const bar = "█".repeat(Math.round((current / needed) * 12)) + "░".repeat(12 - Math.round((current / needed) * 12));
   await message.reply(
-    `👤 **${target.displayName}**\n` +
-    `🏅 Sıra: **#${rank}** · ⭐ Seviye: **${userData.level}** · 💬 Mesaj: **${userData.messageCount.toLocaleString()}**\n` +
-    `✨ XP: **${current.toLocaleString()}** / ${needed.toLocaleString()}\n` +
-    `[${bar}] %${pct}`,
+    `👤 **${target.displayName}** | 🏅 #${rank} · ⭐ Seviye ${userData.level} · 💬 ${userData.messageCount.toLocaleString()} mesaj\n` +
+    `✨ XP: **${current.toLocaleString()}** / ${needed.toLocaleString()} [${bar}] %${Math.round((current / needed) * 100)}`,
   );
 }
 
@@ -74,17 +103,32 @@ async function handlePrefixProfil(message: Message): Promise<void> {
   const userData = await getUserLevel(target.id, message.guildId);
   const rank = await getRank(target.id, message.guildId);
   const { current, needed } = xpToNextLevel(userData.xp, userData.level);
-  const avatarUrl = target.displayAvatarURL({ extension: "png", size: 256 });
   const buffer = await generateProfileCard({
     username: target.displayName,
-    avatarUrl,
-    level: userData.level,
-    xp: current,
-    xpNeeded: needed,
-    rank,
-    messageCount: userData.messageCount,
+    avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
+    level: userData.level, xp: current, xpNeeded: needed, rank, messageCount: userData.messageCount,
   });
   await message.reply({ files: [new AttachmentBuilder(buffer, { name: "profil.png" })] });
+}
+
+async function handlePrefixSicil(message: Message): Promise<void> {
+  if (!message.guildId || !message.member) return;
+  if (!message.member.permissions.has("ModerateMembers")) { await message.reply("❌ **Moderate Members** iznin yok."); return; }
+  const target = message.mentions.users.first();
+  if (!target) { await message.reply("❌ Kullanım: `sicil @kullanici`"); return; }
+  const logs = await getUserLogs(target.id, message.guildId);
+  const buffer = await generateSicilCard({ username: target.displayName, avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }), logs });
+  await message.reply({ files: [new AttachmentBuilder(buffer, { name: "sicil.png" })] });
+}
+
+async function handlePrefixTemizle(message: Message, args: string[]): Promise<void> {
+  if (!message.guild || !message.member || !(message.channel instanceof TextChannel)) return;
+  if (!message.member.permissions.has("ManageMessages")) { await message.reply("❌ **Manage Messages** iznin yok."); return; }
+  const adet = Math.min(parseInt(args[0] ?? "10") || 10, 100);
+  const msgs = await message.channel.messages.fetch({ limit: adet + 1 });
+  const deleted = await message.channel.bulkDelete(msgs, true);
+  const reply = await message.channel.send(`🗑️ **${deleted.size - 1}** mesaj silindi.`);
+  setTimeout(() => reply.delete().catch(() => null), 4000);
 }
 
 async function handlePrefixLeaderboard(message: Message): Promise<void> {
@@ -96,8 +140,7 @@ async function handlePrefixLeaderboard(message: Message): Promise<void> {
     top.map(async (entry, i) => {
       const medal = medals[i] ?? `**${i + 1}.**`;
       let name: string;
-      try { name = (await message.client.users.fetch(entry.userId)).displayName; }
-      catch { name = `<@${entry.userId}>`; }
+      try { name = (await message.client.users.fetch(entry.userId)).displayName; } catch { name = `<@${entry.userId}>`; }
       return `${medal} **${name}** — Seviye **${entry.level}** · ${entry.xp.toLocaleString()} XP`;
     }),
   );
@@ -106,10 +149,7 @@ async function handlePrefixLeaderboard(message: Message): Promise<void> {
 
 async function handlePrefixSetPrefix(message: Message, args: string[]): Promise<void> {
   if (!message.guildId || !message.member) return;
-  if (!message.member.permissions.has("ManageGuild")) {
-    await message.reply("❌ Bu komutu kullanmak için **Manage Server** iznin olmalı.");
-    return;
-  }
+  if (!message.member.permissions.has("ManageGuild")) { await message.reply("❌ **Manage Server** iznin yok."); return; }
   const newPrefix = args[0];
   if (!newPrefix || newPrefix.length > 5) { await message.reply("❌ Kullanım: `setprefix <yeni_prefix>` (maks. 5 karakter)"); return; }
   const { setPrefix, getPrefix: gp } = await import("./guildSettings");
@@ -120,12 +160,17 @@ async function handlePrefixSetPrefix(message: Message, args: string[]): Promise<
 
 const prefixHandlers: Record<string, (message: Message, args: string[]) => Promise<void>> = {
   kick: handlePrefixKick,
+  ban: handlePrefixBan,
+  warn: handlePrefixWarn,
   level: (m) => handlePrefixLevel(m),
   lvl: (m) => handlePrefixLevel(m),
   profil: (m) => handlePrefixProfil(m),
   profile: (m) => handlePrefixProfil(m),
+  sicil: (m) => handlePrefixSicil(m),
   leaderboard: (m) => handlePrefixLeaderboard(m),
   lb: (m) => handlePrefixLeaderboard(m),
+  temizle: handlePrefixTemizle,
+  clear: handlePrefixTemizle,
   setprefix: handlePrefixSetPrefix,
 };
 
@@ -149,7 +194,6 @@ export async function startBot(): Promise<void> {
     ],
   });
 
-  // READY: guild komutlarını anında kaydet
   client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
     for (const guild of c.guilds.cache.values()) {
@@ -162,7 +206,6 @@ export async function startBot(): Promise<void> {
     }
   });
 
-  // Mesaj: XP + prefix komutlar
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot || !message.guildId) return;
 
@@ -172,25 +215,19 @@ export async function startBot(): Promise<void> {
       const [commandName, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
       const handler = prefixHandlers[commandName?.toLowerCase() ?? ""];
       if (handler) {
-        await handler(message, args).catch((err) =>
-          logger.error({ err, commandName }, "Prefix komut hatası"),
-        );
-        return; // prefix komutlarda XP verme
+        await handler(message, args).catch((err) => logger.error({ err, commandName }, "Prefix komut hatası"));
+        return;
       }
     }
 
-    // XP ver
     const result = await handleXp(message.author.id, message.guildId, message.guild ?? undefined).catch(
       (err) => { logger.error({ err }, "XP hatası"); return null; },
     );
     if (result?.leveledUp) {
-      await message.channel
-        .send(`🎉 Tebrikler ${message.author}! **${result.newLevel}. seviyeye** ulaştın!`)
-        .catch(() => null);
+      await message.channel.send(`🎉 Tebrikler ${message.author}! **${result.newLevel}. seviyeye** ulaştın!`).catch(() => null);
     }
   });
 
-  // Slash komutları
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const command = commands.get(interaction.commandName);
