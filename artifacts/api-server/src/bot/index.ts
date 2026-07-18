@@ -156,15 +156,6 @@ export async function startBot(): Promise<void> {
   const rest = new REST().setToken(token);
   const commandData = [...commands.values()].map((cmd) => cmd.data.toJSON());
 
-  try {
-    logger.info("Slash komutları Discord'a kaydediliyor...");
-    await rest.put(Routes.applicationCommands(clientId), { body: commandData });
-    logger.info("Slash komutları başarıyla kaydedildi.");
-  } catch (err) {
-    logger.error({ err }, "Slash komutları kaydedilemedi");
-    return;
-  }
-
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -174,8 +165,20 @@ export async function startBot(): Promise<void> {
     ],
   });
 
-  client.once(Events.ClientReady, (c) => {
+  // READY'de guild komutları olarak kaydet — anında aktif olur (global 1 saate kadar sürer)
+  client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
+    for (const guild of c.guilds.cache.values()) {
+      try {
+        await rest.put(
+          Routes.applicationGuildCommands(clientId, guild.id),
+          { body: commandData },
+        );
+        logger.info({ guildId: guild.id, name: guild.name }, "Komutlar sunucuya kaydedildi");
+      } catch (err) {
+        logger.error({ err, guildId: guild.id }, "Sunucuya komut kaydedilemedi");
+      }
+    }
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
