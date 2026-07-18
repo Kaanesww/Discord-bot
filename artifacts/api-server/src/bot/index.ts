@@ -35,6 +35,7 @@ import * as sicilCommand from "./commands/sicil";
 import * as temizleCommand from "./commands/temizle";
 import * as yardimCommand from "./commands/yardim";
 import * as nukeCommand from "./commands/nuke";
+import * as sunucukurCommand from "./commands/sunucukur";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -46,7 +47,7 @@ for (const cmd of [
   kickCommand, levelCommand, leaderboardCommand, setPrefixCommand,
   profilCommand, levelRolCommand, banCommand, unbanCommand,
   timeoutCommand, untimeoutCommand, warnCommand, uyariKaldirCommand,
-  sicilCommand, temizleCommand, yardimCommand, nukeCommand,
+  sicilCommand, temizleCommand, yardimCommand, nukeCommand, sunucukurCommand,
 ]) {
   commands.set((cmd as Command).data.name, cmd as Command);
 }
