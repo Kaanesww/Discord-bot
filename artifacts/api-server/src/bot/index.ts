@@ -7,9 +7,13 @@ import {
   Routes,
   type ChatInputCommandInteraction,
   type SlashCommandBuilder,
+  type Message,
 } from "discord.js";
 import { logger } from "../lib/logger";
+import { handleXp } from "./leveling";
 import * as kickCommand from "./commands/kick";
+import * as levelCommand from "./commands/level";
+import * as leaderboardCommand from "./commands/leaderboard";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -18,6 +22,8 @@ interface Command {
 
 const commands = new Collection<string, Command>();
 commands.set(kickCommand.data.name, kickCommand as Command);
+commands.set(levelCommand.data.name, levelCommand as Command);
+commands.set(leaderboardCommand.data.name, leaderboardCommand as Command);
 
 export async function startBot(): Promise<void> {
   const token = process.env["DISCORD_TOKEN"];
@@ -29,9 +35,7 @@ export async function startBot(): Promise<void> {
   }
 
   if (!clientId) {
-    logger.warn(
-      "DISCORD_CLIENT_ID is not set — Discord bot will not start.",
-    );
+    logger.warn("DISCORD_CLIENT_ID is not set — Discord bot will not start.");
     return;
   }
 
@@ -41,9 +45,7 @@ export async function startBot(): Promise<void> {
 
   try {
     logger.info("Slash komutları Discord'a kaydediliyor...");
-    await rest.put(Routes.applicationCommands(clientId), {
-      body: commandData,
-    });
+    await rest.put(Routes.applicationCommands(clientId), { body: commandData });
     logger.info("Slash komutları başarıyla kaydedildi.");
   } catch (err) {
     logger.error({ err }, "Slash komutları kaydedilemedi");
@@ -51,11 +53,36 @@ export async function startBot(): Promise<void> {
   }
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
   });
 
   client.once(Events.ClientReady, (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
+  });
+
+  // XP sistemi: her mesajda XP ver
+  client.on(Events.MessageCreate, async (message: Message) => {
+    if (message.author.bot || !message.guildId) return;
+
+    const result = await handleXp(message.author.id, message.guildId).catch(
+      (err) => {
+        logger.error({ err }, "XP işlenirken hata");
+        return null;
+      },
+    );
+
+    if (result?.leveledUp) {
+      await message.channel
+        .send(
+          `🎉 Tebrikler ${message.author}! **${result.newLevel}. seviyeye** ulaştın!`,
+        )
+        .catch(() => null);
+    }
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -68,7 +95,10 @@ export async function startBot(): Promise<void> {
       await command.execute(interaction);
     } catch (err) {
       logger.error({ err, command: interaction.commandName }, "Komut hatası");
-      const msg = { content: "❌ Komut çalıştırılırken bir hata oluştu.", ephemeral: true };
+      const msg = {
+        content: "❌ Komut çalıştırılırken bir hata oluştu.",
+        ephemeral: true,
+      };
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(msg);
       } else {
