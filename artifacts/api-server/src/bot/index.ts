@@ -242,6 +242,9 @@ export async function startBot(): Promise<void> {
       activities: [{ name: "VBRI and TURKLAND", type: 3 }], // 3 = Watching
     });
 
+    const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot+applications.commands`;
+    logger.info({ inviteUrl }, "✅ Botu bu URL ile yeniden ekle (applications.commands scope için):");
+
     for (const guild of c.guilds.cache.values()) {
       try {
         await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: commandData });
