@@ -217,6 +217,12 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
+
+    c.user.setPresence({
+      status: "online",
+      activities: [{ name: "VBRI and TURKLAND", type: 3 }], // 3 = Watching
+    });
+
     for (const guild of c.guilds.cache.values()) {
       try {
         await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: commandData });
