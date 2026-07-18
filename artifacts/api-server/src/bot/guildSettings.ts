@@ -3,7 +3,7 @@ import { guildSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const cache = new Map<string, string>();
-const DEFAULT_PREFIX = "!";
+const DEFAULT_PREFIX = "v!";
 
 export async function getPrefix(guildId: string): Promise<string> {
   if (cache.has(guildId)) return cache.get(guildId)!;
