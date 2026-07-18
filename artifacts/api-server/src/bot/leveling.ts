@@ -4,7 +4,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import type { Guild } from "discord.js";
 
-// Seviye atlamak için gereken XP: 5 * level^2 + 50 * level + 100
+// Seviye için gereken XP: 5*n^2 + 50*n + 100
 export function xpForLevel(level: number): number {
   if (level <= 0) return 100;
   return 5 * level * level + 50 * level + 100;
@@ -21,22 +21,17 @@ export function levelFromXp(totalXp: number): number {
   return level;
 }
 
-// Bir sonraki seviye için gereken XP (kalan)
+// Bu seviyedeki XP ilerlemesi
 export function xpToNextLevel(totalXp: number, currentLevel: number): { current: number; needed: number } {
   let cumulative = 0;
   for (let i = 1; i <= currentLevel; i++) cumulative += xpForLevel(i);
-  const current = totalXp - cumulative;
-  const needed = xpForLevel(currentLevel + 1);
-  return { current, needed };
+  return { current: totalXp - cumulative, needed: xpForLevel(currentLevel + 1) };
 }
 
-// Mesaj başına kazanılan rastgele XP (15-25)
+// Mesaj başına kazanılan XP (15-25)
 function randomXp(): number {
   return Math.floor(Math.random() * 11) + 15;
 }
-
-// Cooldown: aynı kullanıcı 60 saniyede bir XP kazanır
-const cooldowns = new Map<string, number>();
 
 export async function getUserLevel(
   userId: string,
@@ -58,7 +53,7 @@ export async function getRank(userId: string, guildId: string): Promise<number> 
       and(
         eq(levelsTable.guildId, guildId),
         sql`${levelsTable.xp} > (
-          SELECT xp FROM levels WHERE user_id = ${userId} AND guild_id = ${guildId}
+          SELECT COALESCE((SELECT xp FROM levels WHERE user_id = ${userId} AND guild_id = ${guildId}), 0)
         )`,
       ),
     );
@@ -82,10 +77,7 @@ export async function getLeaderboard(
     .limit(limit);
 }
 
-// Level rol ödülleri
-export async function getLevelRoles(
-  guildId: string,
-): Promise<{ level: number; roleId: string }[]> {
+export async function getLevelRoles(guildId: string): Promise<{ level: number; roleId: string }[]> {
   return db
     .select({ level: levelRolesTable.level, roleId: levelRolesTable.roleId })
     .from(levelRolesTable)
@@ -97,10 +89,7 @@ export async function setLevelRole(guildId: string, level: number, roleId: strin
   await db
     .insert(levelRolesTable)
     .values({ guildId, level, roleId })
-    .onConflictDoUpdate({
-      target: [levelRolesTable.guildId, levelRolesTable.level],
-      set: { roleId },
-    });
+    .onConflictDoUpdate({ target: [levelRolesTable.guildId, levelRolesTable.level], set: { roleId } });
 }
 
 export async function removeLevelRole(guildId: string, level: number): Promise<boolean> {
@@ -111,7 +100,6 @@ export async function removeLevelRole(guildId: string, level: number): Promise<b
   return result.length > 0;
 }
 
-// Rol ödülü uygula
 async function applyRoleRewards(guild: Guild, userId: string, newLevel: number): Promise<void> {
   try {
     const rewards = await getLevelRoles(guild.id);
@@ -130,17 +118,12 @@ async function applyRoleRewards(guild: Guild, userId: string, newLevel: number):
   }
 }
 
-// Mesaj atıldığında XP ver
+// Her mesajda XP ver — spam koruması yok
 export async function handleXp(
   userId: string,
   guildId: string,
   guild?: Guild,
-): Promise<{ leveledUp: boolean; newLevel: number } | null> {
-  const key = `${userId}:${guildId}`;
-  const now = Date.now();
-  if ((cooldowns.get(key) ?? 0) + 60_000 > now) return null;
-  cooldowns.set(key, now);
-
+): Promise<{ leveledUp: boolean; newLevel: number; oldLevel: number } | null> {
   const xpGain = randomXp();
   const existing = await getUserLevel(userId, guildId);
   const newXp = existing.xp + xpGain;
@@ -149,14 +132,7 @@ export async function handleXp(
 
   await db
     .insert(levelsTable)
-    .values({
-      userId,
-      guildId,
-      xp: newXp,
-      level: newLevel,
-      messageCount: 1,
-      updatedAt: new Date(),
-    })
+    .values({ userId, guildId, xp: newXp, level: newLevel, messageCount: 1, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: [levelsTable.userId, levelsTable.guildId],
       set: {
@@ -171,5 +147,5 @@ export async function handleXp(
     await applyRoleRewards(guild, userId, newLevel);
   }
 
-  return { leveledUp, newLevel };
+  return { leveledUp, newLevel, oldLevel: existing.level };
 }

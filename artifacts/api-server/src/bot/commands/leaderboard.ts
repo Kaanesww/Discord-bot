@@ -1,17 +1,12 @@
-import {
-  ChatInputCommandInteraction,
-  EmbedBuilder,
-  SlashCommandBuilder,
-} from "discord.js";
+import { AttachmentBuilder, ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { getLeaderboard, xpToNextLevel } from "../leveling";
+import { generateLeaderboardCard, type LeaderboardEntry } from "../leaderboardCard";
 
 export const data = new SlashCommandBuilder()
   .setName("leaderboard")
-  .setDescription("Bu sunucunun en yüksek seviyeli üyelerini gösterir");
+  .setDescription("Sunucunun en yüksek seviyeli üyelerini görsel tablo olarak gösterir");
 
-export async function execute(
-  interaction: ChatInputCommandInteraction,
-): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({ content: "❌ Bu komut sadece sunucularda çalışır.", ephemeral: true });
@@ -26,29 +21,32 @@ export async function execute(
     return;
   }
 
-  const medals = ["🥇", "🥈", "🥉"];
-
-  const lines = await Promise.all(
+  const entries: LeaderboardEntry[] = await Promise.all(
     top.map(async (entry, i) => {
-      const medal = medals[i] ?? `**${i + 1}.**`;
-      let name: string;
+      let username = `Kullanıcı ${entry.userId.slice(-4)}`;
+      let avatarUrl = "";
       try {
         const user = await interaction.client.users.fetch(entry.userId);
-        name = user.displayName;
-      } catch {
-        name = `<@${entry.userId}>`;
-      }
+        username = user.displayName;
+        avatarUrl = user.displayAvatarURL({ extension: "png", size: 64 });
+      } catch { /* ignore */ }
+
       const { current, needed } = xpToNextLevel(entry.xp, entry.level);
-      const pct = Math.round((current / needed) * 100);
-      return `${medal} **${name}** — Seviye **${entry.level}** · ${entry.xp.toLocaleString()} XP · %${pct} sonraki seviyeye`;
+      return {
+        rank: i + 1,
+        userId: entry.userId,
+        username,
+        avatarUrl,
+        level: entry.level,
+        xp: entry.xp,
+        xpCurrent: current,
+        xpNeeded: needed,
+      };
     }),
   );
 
-  const embed = new EmbedBuilder()
-    .setTitle("🏆 Sunucu Liderboard")
-    .setColor(0xfaa61a)
-    .setDescription(lines.join("\n\n"))
-    .setFooter({ text: `Toplam ${top.length} aktif üye gösteriliyor` });
-
-  await interaction.editReply({ embeds: [embed] });
+  const buffer = await generateLeaderboardCard(entries);
+  await interaction.editReply({
+    files: [new AttachmentBuilder(buffer, { name: "leaderboard.png" })],
+  });
 }

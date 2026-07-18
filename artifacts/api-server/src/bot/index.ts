@@ -15,6 +15,8 @@ import { logger } from "../lib/logger";
 import { handleXp, getUserLevel, getRank, xpToNextLevel, getLeaderboard } from "./leveling";
 import { getPrefix } from "./guildSettings";
 import { generateProfileCard } from "./profileCard";
+import { generateLeaderboardCard, type LeaderboardEntry } from "./leaderboardCard";
+import { generateLevelUpCard } from "./levelUpCard";
 import { generateSicilCard } from "./sicilCard";
 import { logAction, getUserLogs } from "./moderation";
 import * as kickCommand from "./commands/kick";
@@ -28,7 +30,7 @@ import * as unbanCommand from "./commands/unban";
 import * as timeoutCommand from "./commands/timeout";
 import * as untimeoutCommand from "./commands/untimeout";
 import * as warnCommand from "./commands/warn";
-import * as uyarikaldir from "./commands/uyarikaldir";
+import * as uyariKaldirCommand from "./commands/uyarikaldir";
 import * as sicilCommand from "./commands/sicil";
 import * as temizleCommand from "./commands/temizle";
 
@@ -41,7 +43,7 @@ const commands = new Collection<string, Command>();
 for (const cmd of [
   kickCommand, levelCommand, leaderboardCommand, setPrefixCommand,
   profilCommand, levelRolCommand, banCommand, unbanCommand,
-  timeoutCommand, untimeoutCommand, warnCommand, uyarikaldir,
+  timeoutCommand, untimeoutCommand, warnCommand, uyariKaldirCommand,
   sicilCommand, temizleCommand,
 ]) {
   commands.set((cmd as Command).data.name, cmd as Command);
@@ -90,25 +92,39 @@ async function handlePrefixLevel(message: Message): Promise<void> {
   const userData = await getUserLevel(target.id, message.guildId);
   const rank = await getRank(target.id, message.guildId);
   const { current, needed } = xpToNextLevel(userData.xp, userData.level);
-  const bar = "█".repeat(Math.round((current / needed) * 12)) + "░".repeat(12 - Math.round((current / needed) * 12));
-  await message.reply(
-    `👤 **${target.displayName}** | 🏅 #${rank} · ⭐ Seviye ${userData.level} · 💬 ${userData.messageCount.toLocaleString()} mesaj\n` +
-    `✨ XP: **${current.toLocaleString()}** / ${needed.toLocaleString()} [${bar}] %${Math.round((current / needed) * 100)}`,
-  );
-}
-
-async function handlePrefixProfil(message: Message): Promise<void> {
-  if (!message.guildId) return;
-  const target = message.mentions.users.first() ?? message.author;
-  const userData = await getUserLevel(target.id, message.guildId);
-  const rank = await getRank(target.id, message.guildId);
-  const { current, needed } = xpToNextLevel(userData.xp, userData.level);
   const buffer = await generateProfileCard({
     username: target.displayName,
     avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
     level: userData.level, xp: current, xpNeeded: needed, rank, messageCount: userData.messageCount,
   });
-  await message.reply({ files: [new AttachmentBuilder(buffer, { name: "profil.png" })] });
+  await message.reply({ files: [new AttachmentBuilder(buffer, { name: "level.png" })] });
+}
+
+async function handlePrefixProfil(message: Message): Promise<void> {
+  return handlePrefixLevel(message);
+}
+
+async function handlePrefixLeaderboard(message: Message): Promise<void> {
+  if (!message.guildId) return;
+  const top = await getLeaderboard(message.guildId, 10);
+  if (top.length === 0) { await message.reply("Henüz kimse mesaj atmamış! 🦗"); return; }
+
+  const entries: LeaderboardEntry[] = await Promise.all(
+    top.map(async (entry, i) => {
+      let username = `Kullanıcı`;
+      let avatarUrl = "";
+      try {
+        const user = await message.client.users.fetch(entry.userId);
+        username = user.displayName;
+        avatarUrl = user.displayAvatarURL({ extension: "png", size: 64 });
+      } catch { /* ignore */ }
+      const { current, needed } = xpToNextLevel(entry.xp, entry.level);
+      return { rank: i + 1, userId: entry.userId, username, avatarUrl, level: entry.level, xp: entry.xp, xpCurrent: current, xpNeeded: needed };
+    }),
+  );
+
+  const buffer = await generateLeaderboardCard(entries);
+  await message.reply({ files: [new AttachmentBuilder(buffer, { name: "leaderboard.png" })] });
 }
 
 async function handlePrefixSicil(message: Message): Promise<void> {
@@ -127,24 +143,8 @@ async function handlePrefixTemizle(message: Message, args: string[]): Promise<vo
   const adet = Math.min(parseInt(args[0] ?? "10") || 10, 100);
   const msgs = await message.channel.messages.fetch({ limit: adet + 1 });
   const deleted = await message.channel.bulkDelete(msgs, true);
-  const reply = await message.channel.send(`🗑️ **${deleted.size - 1}** mesaj silindi.`);
+  const reply = await message.channel.send(`🗑️ **${Math.max(deleted.size - 1, 0)}** mesaj silindi.`);
   setTimeout(() => reply.delete().catch(() => null), 4000);
-}
-
-async function handlePrefixLeaderboard(message: Message): Promise<void> {
-  if (!message.guildId) return;
-  const top = await getLeaderboard(message.guildId, 10);
-  if (top.length === 0) { await message.reply("Henüz kimse mesaj atmamış! 🦗"); return; }
-  const medals = ["🥇", "🥈", "🥉"];
-  const lines = await Promise.all(
-    top.map(async (entry, i) => {
-      const medal = medals[i] ?? `**${i + 1}.**`;
-      let name: string;
-      try { name = (await message.client.users.fetch(entry.userId)).displayName; } catch { name = `<@${entry.userId}>`; }
-      return `${medal} **${name}** — Seviye **${entry.level}** · ${entry.xp.toLocaleString()} XP`;
-    }),
-  );
-  await message.reply(`🏆 **Liderboard**\n\n${lines.join("\n")}`);
 }
 
 async function handlePrefixSetPrefix(message: Message, args: string[]): Promise<void> {
@@ -166,9 +166,11 @@ const prefixHandlers: Record<string, (message: Message, args: string[]) => Promi
   lvl: (m) => handlePrefixLevel(m),
   profil: (m) => handlePrefixProfil(m),
   profile: (m) => handlePrefixProfil(m),
-  sicil: (m) => handlePrefixSicil(m),
+  rank: (m) => handlePrefixLevel(m),
   leaderboard: (m) => handlePrefixLeaderboard(m),
   lb: (m) => handlePrefixLeaderboard(m),
+  top: (m) => handlePrefixLeaderboard(m),
+  sicil: (m) => handlePrefixSicil(m),
   temizle: handlePrefixTemizle,
   clear: handlePrefixTemizle,
   setprefix: handlePrefixSetPrefix,
@@ -211,20 +213,36 @@ export async function startBot(): Promise<void> {
 
     const prefix = await getPrefix(message.guildId).catch(() => "v!");
 
+    // Prefix komutu mu?
     if (message.content.startsWith(prefix)) {
       const [commandName, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
       const handler = prefixHandlers[commandName?.toLowerCase() ?? ""];
       if (handler) {
         await handler(message, args).catch((err) => logger.error({ err, commandName }, "Prefix komut hatası"));
-        return;
+        return; // prefix komutlarında XP verme
       }
     }
 
+    // Her mesajda XP ver (spam koruması yok)
     const result = await handleXp(message.author.id, message.guildId, message.guild ?? undefined).catch(
       (err) => { logger.error({ err }, "XP hatası"); return null; },
     );
+
     if (result?.leveledUp) {
-      await message.channel.send(`🎉 Tebrikler ${message.author}! **${result.newLevel}. seviyeye** ulaştın!`).catch(() => null);
+      try {
+        const buffer = await generateLevelUpCard({
+          username: message.author.displayName,
+          avatarUrl: message.author.displayAvatarURL({ extension: "png", size: 256 }),
+          oldLevel: result.oldLevel,
+          newLevel: result.newLevel,
+        });
+        await message.channel.send({
+          content: `${message.author}`,
+          files: [new AttachmentBuilder(buffer, { name: "levelup.png" })],
+        });
+      } catch {
+        await message.channel.send(`🎉 Tebrikler ${message.author}! **${result.newLevel}. seviyeye** ulaştın!`).catch(() => null);
+      }
     }
   });
 
