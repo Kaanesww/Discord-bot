@@ -168,12 +168,9 @@ export async function startBot(): Promise<void> {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
-      // MessageContent ve GuildMembers yetkili intent'tir.
-      // Discord Developer Portal → Bot → Privileged Gateway Intents
-      // altında açılırsa aşağıya ekle:
-      // GatewayIntentBits.MessageContent,
-      // GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.MessageContent,
     ],
   });
 
