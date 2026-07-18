@@ -34,6 +34,7 @@ import * as uyariKaldirCommand from "./commands/uyarikaldir";
 import * as sicilCommand from "./commands/sicil";
 import * as temizleCommand from "./commands/temizle";
 import * as yardimCommand from "./commands/yardim";
+import * as nukeCommand from "./commands/nuke";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -45,7 +46,7 @@ for (const cmd of [
   kickCommand, levelCommand, leaderboardCommand, setPrefixCommand,
   profilCommand, levelRolCommand, banCommand, unbanCommand,
   timeoutCommand, untimeoutCommand, warnCommand, uyariKaldirCommand,
-  sicilCommand, temizleCommand, yardimCommand,
+  sicilCommand, temizleCommand, yardimCommand, nukeCommand,
 ]) {
   commands.set((cmd as Command).data.name, cmd as Command);
 }
@@ -192,6 +193,21 @@ const prefixHandlers: Record<string, (message: Message, args: string[]) => Promi
     const { generateHelpCard } = await import("./helpCard");
     const buf = await generateHelpCard(prefix);
     await m.reply({ files: [new AttachmentBuilder(buf, { name: "yardim.png" })] });
+  },
+  nuke: async (m) => {
+    if (!m.guild || !(m.channel instanceof TextChannel)) return;
+    if (!m.member || !m.member.permissions.has("ManageChannels")) {
+      await m.reply("❌ **Manage Channels** iznin yok."); return;
+    }
+    const ch = m.channel;
+    const { name, topic, nsfw, rateLimitPerUser, position, parentId } = ch;
+    const overwrites = ch.permissionOverwrites.cache.map((o) => ({ id: o.id, allow: o.allow, deny: o.deny, type: o.type }));
+    await ch.delete(`Nuke — ${m.author.tag}`);
+    const newCh = await m.guild.channels.create({
+      name, type: 0, topic: topic ?? undefined, nsfw, rateLimitPerUser,
+      position, parent: parentId ?? undefined, permissionOverwrites: overwrites,
+    });
+    await newCh.send("💥 **NUKE!** Kanal temizlendi ve yeniden oluşturuldu.");
   },
 };
 
