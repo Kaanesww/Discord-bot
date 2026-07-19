@@ -43,6 +43,9 @@ import * as zarCmd from "./commands/zar";
 import * as top8Cmd from "./commands/top8";
 import * as rpsCmd from "./commands/rps";
 import * as patlaCmd from "./commands/patla";
+import * as coinflipCmd from "./commands/coinflip";
+import * as blackjackCmd from "./commands/blackjack";
+import { isOwner } from "./ownerUtils";
 
 interface Command {
   data: SlashCommandBuilder;
@@ -55,6 +58,7 @@ const SLASH_COMMANDS = [
   sicilCmd, temizleCmd, yardimCmd, nukeCmd, kilitleCmd, acCmd,
   gunlukodulCmd, bakiyeCmd, transferCmd, kumarCmd, duelCmd, ruletCmd,
   zarCmd, top8Cmd, rpsCmd, patlaCmd,
+  coinflipCmd, blackjackCmd,
 ];
 
 const commands = new Collection<string, Command>();
@@ -131,7 +135,7 @@ async function pfxLeaderboard(m: Message): Promise<void> {
 
 async function pfxSicil(m: Message): Promise<void> {
   if (!m.guildId || !m.member) return;
-  if (!m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+  if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
   const target = m.mentions.users.first();
   if (!target) { await m.reply("❌ Kullanım: `sicil @kullanici`"); return; }
   const logs = await getUserLogs(target.id, m.guildId);
@@ -141,7 +145,7 @@ async function pfxSicil(m: Message): Promise<void> {
 
 async function pfxTemizle(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.member || !(m.channel instanceof TextChannel)) return;
-  if (!m.member.permissions.has("ManageMessages")) { await m.reply("❌ **Manage Messages** iznin yok."); return; }
+  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageMessages")) { await m.reply("❌ **Manage Messages** iznin yok."); return; }
   const n = Math.min(parseInt(args[0] ?? "10") || 10, 100);
   const msgs = await m.channel.messages.fetch({ limit: n + 1 });
   const deleted = await m.channel.bulkDelete(msgs, true);
@@ -151,9 +155,9 @@ async function pfxTemizle(m: Message, args: string[]): Promise<void> {
 
 async function pfxNuke(m: Message): Promise<void> {
   if (!m.guild || !(m.channel instanceof TextChannel)) return;
-  const isOwner = m.guild.ownerId === m.author.id;
+  const guildOwner = m.guild.ownerId === m.author.id;
   const isAdmin = m.member?.permissions.has("Administrator") ?? false;
-  if (!isOwner && !isAdmin) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
+  if (!isOwner(m.author.id) && !guildOwner && !isAdmin) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
   const ch = m.channel;
   const { name, topic, nsfw, rateLimitPerUser, position, parentId } = ch;
   const overwrites = ch.permissionOverwrites.cache.map((o) => ({ id: o.id, allow: o.allow, deny: o.deny, type: o.type }));
@@ -164,9 +168,9 @@ async function pfxNuke(m: Message): Promise<void> {
 
 async function pfxSunucuKur(m: Message): Promise<void> {
   if (!m.guild || !m.member) return;
-  const isOwner = m.guild.ownerId === m.author.id;
-  const isAdmin = m.member.permissions.has("Administrator");
-  if (!isOwner && !isAdmin) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
+  const guildOwner2 = m.guild.ownerId === m.author.id;
+  const isAdmin2 = m.member.permissions.has("Administrator");
+  if (!isOwner(m.author.id) && !guildOwner2 && !isAdmin2) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
   const status = await m.reply("⏳ Kategori ve kanallar oluşturuluyor...");
   let created = 0;
   for (const catDef of SUNUCU_YAPISI) {
@@ -206,7 +210,7 @@ const prefixHandlers: Record<string, (m: Message, args: string[]) => Promise<voi
   },
   ban: async (m, args) => {
     if (!m.guild || !m.member) return;
-    if (!m.member.permissions.has("BanMembers")) { await m.reply("❌ **Ban Members** iznin yok."); return; }
+    if (!isOwner(m.author.id) && !m.member.permissions.has("BanMembers")) { await m.reply("❌ **Ban Members** iznin yok."); return; }
     const target = m.mentions.users.first();
     if (!target) { await m.reply("❌ Kullanım: `ban @kullanici [sebep]`"); return; }
     const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
@@ -216,18 +220,18 @@ const prefixHandlers: Record<string, (m: Message, args: string[]) => Promise<voi
   },
   kick: async (m, args) => {
     if (!m.guild || !m.member) return;
-    if (!m.member.permissions.has("KickMembers")) { await m.reply("❌ **Kick Members** iznin yok."); return; }
+    if (!isOwner(m.author.id) && !m.member.permissions.has("KickMembers")) { await m.reply("❌ **Kick Members** iznin yok."); return; }
     const target = m.mentions.members?.first();
     if (!target) { await m.reply("❌ Kullanım: `kick @kullanici [sebep]`"); return; }
     const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
-    if (!target.kickable) { await m.reply("❌ Bu kullanıcıyı atamıyorum."); return; }
+    if (!target.kickable && !isOwner(m.author.id)) { await m.reply("❌ Bu kullanıcıyı atamıyorum."); return; }
     await target.kick(sebep);
     await logAction({ guildId: m.guildId!, userId: target.id, moderatorId: m.author.id, action: "kick", reason: sebep });
     await m.reply(`👢 **${target.user.tag}** atıldı. Sebep: ${sebep}`);
   },
   warn: async (m, args) => {
     if (!m.guildId || !m.member) return;
-    if (!m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+    if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
     const target = m.mentions.users.first();
     if (!target) { await m.reply("❌ Kullanım: `warn @kullanici [sebep]`"); return; }
     const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
@@ -240,17 +244,17 @@ const prefixHandlers: Record<string, (m: Message, args: string[]) => Promise<voi
     const r = await claimDaily(m.author.id, m.guildId);
     if (r.alreadyClaimed) { await m.reply("⏰ Zaten aldın! 20 saat sonra tekrar dene."); return; }
     const bal = await getBalance(m.author.id, m.guildId);
-    await m.reply(`🎁 **+${r.reward.toLocaleString()}** 🪙 | Seri: ${r.streak} gün | Bakiye: **${bal.coins.toLocaleString()}** 🪙`);
+    await m.reply(`🎁 **+${r.reward.toLocaleString("tr-TR")}** ⬤V | Seri: ${r.streak} gün | Bakiye: **${bal.coins.toLocaleString("tr-TR")} ⬤V**`);
   },
   bakiye: async (m) => {
     if (!m.guildId) return;
     const target = m.mentions.users.first() ?? m.author;
     const bal = await getBalance(target.id, m.guildId);
-    await m.reply(`💳 **${target.displayName}** — **${bal.coins.toLocaleString()}** 🪙 | Seri: ${bal.streak} gün`);
+    await m.reply(`💳 **${target.displayName}** — **${bal.coins.toLocaleString("tr-TR")} ⬤V** | Seri: ${bal.streak} gün`);
   },
   setprefix: async (m, args) => {
     if (!m.guildId || !m.member) return;
-    if (!m.member.permissions.has("ManageGuild")) { await m.reply("❌ **Manage Server** iznin yok."); return; }
+    if (!isOwner(m.author.id) && !m.member.permissions.has("ManageGuild")) { await m.reply("❌ **Manage Server** iznin yok."); return; }
     const np = args[0];
     if (!np || np.length > 5) { await m.reply("❌ Kullanım: `setprefix <yeni>` (maks 5 karakter)"); return; }
     const old = await getPrefix(m.guildId);

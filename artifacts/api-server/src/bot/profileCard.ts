@@ -48,6 +48,28 @@ function hexToRgba(hex: string, alpha: number): string {
 
 function clip(s: string, max: number) { return s.length > max ? s.slice(0, max-1)+"…" : s; }
 
+/** Para simgesi: tamamen siyah daire, üstünde beyaz V */
+function drawCoinIcon(ctx: any, cx: number, cy: number, radius: number, accentColor: string): void {
+  // Siyah dolu daire
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#000000";
+  ctx.fill();
+  // İnce altın kenarlık
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // Beyaz V harfi
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `bold ${Math.round(radius * 1.3)}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("V", cx, cy + radius * 0.05);
+  ctx.textBaseline = "alphabetic";
+  ctx.restore();
+}
+
 export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buffer> {
   const W = 920;
   const H = 320;
@@ -66,7 +88,7 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   ctx.fillStyle = bg;
   ctx.fill();
 
-  // Glow
+  // Sol glow
   const glow = ctx.createRadialGradient(220, H/2, 0, 220, H/2, 240);
   glow.addColorStop(0, theme.glowColor);
   glow.addColorStop(1, "rgba(0,0,0,0)");
@@ -96,7 +118,6 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   const avY = (H - avSize) / 2;
   const cx = avX + avSize/2, cy = avY + avSize/2;
 
-  // Dış parlak halka (çift)
   const ring = ctx.createLinearGradient(avX, avY, avX+avSize, avY+avSize);
   ring.addColorStop(0, accent);
   ring.addColorStop(1, theme.accent2);
@@ -117,7 +138,7 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   }
   ctx.restore();
 
-  // Seviye rozeti (avatar üzeri)
+  // Seviye rozeti
   const badgeR = 28;
   const bx = avX + avSize - 4, by = avY + avSize - 4;
   const badgeBg = ctx.createLinearGradient(bx-badgeR, by-badgeR, bx+badgeR, by+badgeR);
@@ -134,40 +155,66 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   const rightW = W - tx - 28;
 
   // Ünvan badge
-  const titleW = ctx.measureText(`${theme.titleEmoji} ${theme.title}`).width + 26;
+  ctx.font = "bold 13px sans-serif";
+  const titleText = `${theme.titleEmoji} ${theme.title}`;
+  const titleW = ctx.measureText(titleText).width + 26;
   roundRect(ctx, tx, 24, titleW, 28, 14);
   ctx.fillStyle = hexToRgba(accent, 0.22); ctx.fill();
   ctx.strokeStyle = hexToRgba(accent, 0.6); ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = accent; ctx.font = "bold 13px sans-serif";
-  ctx.fillText(`${theme.titleEmoji} ${theme.title}`, tx+13, 43);
+  ctx.fillStyle = accent;
+  ctx.fillText(titleText, tx+13, 43);
 
   // Kullanıcı adı
   ctx.fillStyle = "#ffffff"; ctx.font = "bold 34px sans-serif";
   ctx.fillText(clip(opts.username, 20), tx, 98);
 
-  // İstatistik badge'leri
-  const tags = [
-    { text: `🏅 #${opts.rank}`, color: "#faa61a" },
-    { text: `⭐ Lv.${opts.level}`, color: accent },
-    { text: `💬 ${opts.messageCount.toLocaleString()}`, color: "#57f287" },
-    ...(opts.coins !== undefined ? [{ text: `🪙 ${opts.coins.toLocaleString()}`, color: "#ffd700" }] : []),
-    ...(opts.voiceMinutes !== undefined && opts.voiceMinutes > 0 ? [{ text: `🎤 ${opts.voiceMinutes}dk`, color: "#5865f2" }] : []),
+  // ── İstatistikler — YAZI olarak ──────────────────────
+  // Küçük renkli satırlar: Rank | Level | Mesaj | Ses | Bakiye
+  ctx.font = "bold 13px sans-serif";
+  const stats: Array<{ label: string; value: string; color: string; coin?: boolean }> = [
+    { label: "🏅 Sıra", value: `#${opts.rank}`, color: "#faa61a" },
+    { label: "⭐ Seviye", value: String(opts.level), color: accent },
+    { label: "💬 Mesaj", value: opts.messageCount.toLocaleString("tr-TR") + " mesaj", color: "#57f287" },
+    ...(opts.voiceMinutes !== undefined ? [{ label: "🎤 Ses", value: opts.voiceMinutes > 0 ? `${opts.voiceMinutes} dakika` : "0 dakika", color: "#5865f2" } as const] : []),
+    ...(opts.coins !== undefined ? [{ label: "Bakiye", value: opts.coins.toLocaleString("tr-TR"), color: "#ffd700", coin: true } as const] : []),
   ];
-  let tagX = tx;
-  const tagY = 120;
-  for (const tag of tags) {
-    const tw = ctx.measureText(tag.text).width + 22;
-    if (tagX + tw > W - 20) break;
-    roundRect(ctx, tagX, tagY, tw, 28, 14);
-    ctx.fillStyle = hexToRgba(tag.color, 0.18); ctx.fill();
-    ctx.fillStyle = tag.color; ctx.font = "bold 13px sans-serif";
-    ctx.fillText(tag.text, tagX+11, tagY+19);
-    tagX += tw + 8;
-  }
 
-  // XP bar arka plan
-  const barX = tx, barY = 168, barW = rightW, barH = 26;
+  // İki kolon halinde yan yana
+  const statStartY = 116;
+  const colW = Math.floor(rightW / 2);
+  stats.forEach((s, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const sx = tx + col * colW;
+    const sy = statStartY + row * 22;
+
+    // Label (soluk)
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(s.label + ": ", sx, sy);
+    const labelW = ctx.measureText(s.label + ": ").width;
+
+    // Eğer coin ise, özel ikon çiz + değer yaz
+    if (s.coin) {
+      const iconR = 7;
+      drawCoinIcon(ctx, sx + labelW + iconR + 1, sy - iconR + 2, iconR, "#ffd700");
+      ctx.fillStyle = s.color;
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(s.value, sx + labelW + iconR * 2 + 5, sy);
+    } else {
+      ctx.fillStyle = s.color;
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(s.value, sx + labelW, sy);
+    }
+  });
+
+  // XP bar
+  const barY = 172;
+  const barH = 26;
+  const barX = tx;
+  const barW = rightW;
   const progress = Math.min(opts.xp / Math.max(opts.xpNeeded, 1), 1);
+
   roundRect(ctx, barX, barY, barW, barH, barH/2);
   ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fill();
 
@@ -177,32 +224,28 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
     grad.addColorStop(0, accent); grad.addColorStop(1, "#eb459e");
     roundRect(ctx, barX, barY, filled, barH, barH/2);
     ctx.fillStyle = grad; ctx.fill();
-    // Shine
     const shine = ctx.createLinearGradient(barX, barY, barX, barY+barH);
     shine.addColorStop(0, "rgba(255,255,255,0.28)"); shine.addColorStop(0.6, "rgba(255,255,255,0)");
     roundRect(ctx, barX, barY, filled, barH/2, barH/2);
     ctx.fillStyle = shine; ctx.fill();
   }
 
-  // XP text
-  ctx.fillStyle = "#dcddde"; ctx.font = "bold 14px sans-serif";
-  ctx.fillText(`${opts.xp.toLocaleString()} / ${opts.xpNeeded.toLocaleString()} XP`, barX, barY + barH + 22);
+  ctx.fillStyle = "#dcddde"; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText(`${opts.xp.toLocaleString("tr-TR")} / ${opts.xpNeeded.toLocaleString("tr-TR")} XP`, barX, barY + barH + 22);
   const pct = Math.round(progress * 100);
   ctx.fillStyle = accent; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "right";
   ctx.fillText(`%${pct}`, barX + barW, barY + barH + 22); ctx.textAlign = "left";
 
-  // Alt bilgi çizgisi
+  // Ayırıcı çizgi
   ctx.strokeStyle = "rgba(255,255,255,0.07)"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(tx, 230); ctx.lineTo(W-28, 230); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tx, 240); ctx.lineTo(W-28, 240); ctx.stroke();
 
-  // Sonraki seviye bilgisi
   ctx.fillStyle = "#72767d"; ctx.font = "13px sans-serif";
-  ctx.fillText(`Sonraki seviye için ${(opts.xpNeeded - opts.xp).toLocaleString()} XP gerekiyor`, tx, 258);
+  ctx.fillText(`Sonraki seviye için ${(opts.xpNeeded - opts.xp).toLocaleString("tr-TR")} XP gerekiyor`, tx, 265);
 
-  // Sağ alt: Profil kartı seviye göstergesi
   ctx.textAlign = "right";
   ctx.fillStyle = hexToRgba(accent, 0.7); ctx.font = "bold 13px sans-serif";
-  ctx.fillText(`${theme.titleEmoji} ${theme.title} KART`, W-30, 258);
+  ctx.fillText(`${theme.titleEmoji} ${theme.title} KART`, W-30, 265);
   ctx.textAlign = "left";
 
   return canvas.toBuffer("image/png");
