@@ -1,9 +1,7 @@
 import {
-  ChatInputCommandInteraction,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
-  TextChannel,
-  ChannelType,
+  ChatInputCommandInteraction, PermissionFlagsBits, SlashCommandBuilder,
+  TextChannel, ChannelType, EmbedBuilder, ButtonBuilder, ButtonStyle,
+  ActionRowBuilder, ComponentType,
 } from "discord.js";
 
 export const data = new SlashCommandBuilder()
@@ -13,53 +11,48 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!interaction.guild || !(interaction.channel instanceof TextChannel)) {
-    await interaction.reply({ content: "❌ Bu komut sadece metin kanallarında çalışır.", ephemeral: true });
-    return;
+    await interaction.reply({ content: "❌ Bu komut sadece metin kanallarında çalışır.", ephemeral: true }); return;
   }
-
-  // Sadece sunucu sahibi veya yönetici kullanabilir
+  const isOwner = interaction.guild.ownerId === interaction.user.id;
   const member = interaction.guild.members.cache.get(interaction.user.id)
     ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const isOwner = interaction.guild.ownerId === interaction.user.id;
-  const isAdmin = member?.permissions.has(PermissionFlagsBits.Administrator) ?? false;
-
-  if (!isOwner && !isAdmin) {
-    await interaction.reply({ content: "❌ Bu komutu sadece sunucu sahibi veya yöneticiler kullanabilir.", ephemeral: true });
-    return;
+  if (!isOwner && !member?.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: "❌ Sadece sunucu sahibi veya yöneticiler kullanabilir.", ephemeral: true }); return;
   }
 
-  const channel = interaction.channel;
-
-  // Kanal bilgilerini kaydet
-  const name = channel.name;
-  const topic = channel.topic ?? undefined;
-  const nsfw = channel.nsfw;
-  const rateLimitPerUser = channel.rateLimitPerUser;
-  const position = channel.position;
-  const parentId = channel.parentId ?? undefined;
-  const permissionOverwrites = channel.permissionOverwrites.cache.map((overwrite) => ({
-    id: overwrite.id,
-    allow: overwrite.allow,
-    deny: overwrite.deny,
-    type: overwrite.type,
-  }));
-
-  // Kanalı sil ve aynı ayarlarla yeniden oluştur
-  await channel.delete(`Nuke komutu — ${interaction.user.tag}`);
-
-  const newChannel = await interaction.guild.channels.create({
-    name,
-    type: ChannelType.GuildText,
-    topic,
-    nsfw,
-    rateLimitPerUser,
-    position,
-    parent: parentId,
-    permissionOverwrites,
-    reason: `Nuke komutu — ${interaction.user.tag}`,
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("nuke_confirm").setLabel("💥 NUKE ET").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("nuke_cancel").setLabel("❌ İptal").setStyle(ButtonStyle.Secondary),
+  );
+  await interaction.reply({
+    embeds: [new EmbedBuilder().setColor(0xed4245).setTitle("⚠️ NUKE Onayı").setDescription(`**<#${interaction.channelId}>** kanalını tamamen nuke etmek istediğine emin misin?\n\nKanal silinip aynı ayarlarla yeniden oluşturulacak.`).setFooter({ text: "30 saniye içinde onayla." })],
+    components: [row],
   });
 
-  await newChannel.send({
-    content: "💥 **NUKE!** Kanal temizlendi ve yeniden oluşturuldu.",
+  const msg = await interaction.fetchReply();
+  const collector = msg.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    filter: (i) => i.user.id === interaction.user.id,
+    time: 30_000, max: 1,
+  });
+
+  collector.on("collect", async (i) => {
+    if (i.customId === "nuke_cancel") {
+      await i.update({ embeds: [new EmbedBuilder().setColor(0x72767d).setTitle("❌ İptal Edildi")], components: [] }); return;
+    }
+    await i.update({ embeds: [new EmbedBuilder().setColor(0xed4245).setTitle("💥 Nuke ediliyor...")], components: [] });
+    const ch = interaction.channel as TextChannel;
+    const { name, topic, nsfw, rateLimitPerUser, position, parentId } = ch;
+    const overwrites = ch.permissionOverwrites.cache.map((o) => ({ id: o.id, allow: o.allow, deny: o.deny, type: o.type }));
+    await ch.delete(`Nuke — ${interaction.user.tag}`);
+    const newCh = await interaction.guild!.channels.create({
+      name, type: ChannelType.GuildText, topic: topic ?? undefined, nsfw,
+      rateLimitPerUser, position, parent: parentId ?? undefined, permissionOverwrites: overwrites,
+    });
+    await newCh.send("💥 **NUKE!** Kanal temizlendi ve yeniden oluşturuldu.");
+  });
+
+  collector.on("end", async (c) => {
+    if (c.size === 0) await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x72767d).setTitle("⏰ Süre Doldu").setDescription("Nuke iptal edildi.")], components: [] });
   });
 }

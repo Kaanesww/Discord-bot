@@ -118,13 +118,14 @@ async function applyRoleRewards(guild: Guild, userId: string, newLevel: number):
   }
 }
 
-// Her mesajda XP ver — spam koruması yok
+// Her mesajda XP ver — spam koruması yok. xpAmount belirtilirse sabit XP verilir (ses kanalı için)
 export async function handleXp(
   userId: string,
   guildId: string,
   guild?: Guild,
+  xpAmount?: number,
 ): Promise<{ leveledUp: boolean; newLevel: number; oldLevel: number } | null> {
-  const xpGain = randomXp();
+  const xpGain = xpAmount ?? randomXp();
   const existing = await getUserLevel(userId, guildId);
   const newXp = existing.xp + xpGain;
   const newLevel = levelFromXp(newXp);
