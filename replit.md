@@ -1,44 +1,63 @@
-# [Project name]
+# VBRI Discord Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Turkish-language Discord bot system with a web dashboard. Features XP-based leveling, economy (coins, blackjack, roulette, duels), moderation, and canvas-generated profile/rank cards.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- API server + bot start automatically via the **`artifacts/api-server: API Server`** workflow
+- Dashboard starts automatically via the **`artifacts/bot-dashboard: web`** workflow
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- pnpm workspaces, Node.js 20, TypeScript 5.9
+- **Bot/API**: Express 5, Discord.js 14, @napi-rs/canvas (image cards)
+- **DB**: PostgreSQL (Replit built-in) + Drizzle ORM
+- **Dashboard**: React 19, Vite, Tailwind CSS 4, Shadcn UI
+- **Validation**: Zod, drizzle-zod
+- **API codegen**: Orval (from OpenAPI spec)
+- **Build**: esbuild (CJS bundle)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/src/bot/` — bot entry point, all commands, leveling, economy, moderation
+- `artifacts/api-server/src/bot/commands/` — individual command files
+- `artifacts/api-server/src/routes/` — Express API routes
+- `artifacts/bot-dashboard/src/` — React dashboard frontend
+- `lib/db/src/schema/` — Drizzle ORM schema (economy, guilds, levels, moderation, levelRoles)
+- `lib/api-spec/` — OpenAPI spec (source of truth for API contracts)
+
+## Required env
+
+- `DISCORD_TOKEN` — bot token (saved as Replit Secret)
+- `DISCORD_CLIENT_ID` — app ID (saved as Replit Secret)
+- `DATABASE_URL` — auto-provided by Replit's built-in PostgreSQL
+
+## Bot invite URL
+
+Logged in the API server console on startup (check workflow logs).
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Bot runs inside the same process as the Express API server (`artifacts/api-server/src/index.ts`)
+- All canvas image generation uses `@napi-rs/canvas` (not browser Canvas API)
+- Prefix is per-guild, stored in `guildSettings` table; default is `v!`
+- Currently uses slash commands registered globally via Discord REST API on startup
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Commands should be prefix-based (not slash), default prefix `v!`
+- Help menu should be category-based with per-category images
+- Economy system should have luck mechanic with `pray` command
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The API server builds via esbuild before starting (`pnpm run build` inside the dev script) — first startup is slow (~1-2s)
+- `PORT` env var must be set; the managed workflow injects it automatically (8080 for API, 3000 for dashboard)
+- After any Discord intent or command change, the bot must be restarted for it to re-register slash commands
 
 ## Pointers
 
