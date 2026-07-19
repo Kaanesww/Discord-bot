@@ -16,75 +16,93 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
     {
       label: "Moderasyon", icon: "🛡️", color: "#ed4245",
       commands: [
-        { name: `/ban`, desc: "Yasaklar (onaylı)" },
-        { name: `/kick`, desc: "Atar (onaylı)" },
-        { name: `/warn`, desc: "Uyarı + DM" },
-        { name: `/timeout`, desc: "Susturur" },
-        { name: `/untimeout`, desc: "Susturmayı kaldırır" },
-        { name: `/unban`, desc: "Yasağı kaldırır" },
-        { name: `/uyarikaldir`, desc: "Uyarı siler" },
-        { name: `/kilitle`, desc: "Kanalı kilitler" },
-        { name: `/ac`, desc: "Kilidi açar" },
-        { name: `/temizle`, desc: "Toplu mesaj siler" },
-        { name: `/nuke`, desc: "Kanalı nuke eder (onaylı)" },
+        { name: `/ban`,          desc: "Yasaklar (onaylı)" },
+        { name: `/kick`,         desc: "Atar (onaylı)" },
+        { name: `/warn`,         desc: "Uyarı + DM" },
+        { name: `/timeout`,      desc: "Susturur" },
+        { name: `/untimeout`,    desc: "Susturmayı kaldırır" },
+        { name: `/unban`,        desc: "Yasağı kaldırır" },
+        { name: `/uyarikaldir`,  desc: "Uyarı siler" },
+        { name: `/kilitle`,      desc: "Kanalı kilitler" },
+        { name: `/ac`,           desc: "Kilidi açar" },
+        { name: `/temizle`,      desc: "Toplu mesaj siler" },
+        { name: `/nuke`,         desc: "Kanalı nuke eder" },
+        { name: `/sicil`,        desc: "Sicil kayıt kartı" },
+        { name: `/kullanicibilgi`, desc: "Kullanıcı bilgisi" },
       ],
     },
     {
       label: "Level Sistemi", icon: "⭐", color: "#5865f2",
       commands: [
-        { name: `${prefix}level / /level`, desc: "Seviye kartı" },
-        { name: `${prefix}profil / /profil`, desc: "Profil kartı" },
-        { name: `${prefix}lb / /leaderboard`, desc: "Liderboard görseli" },
-        { name: `/levelrol ekle`, desc: "Seviye rol ödülü" },
-        { name: `/levelrol liste`, desc: "Rol ödüllerini listeler" },
-        { name: `/levelrol kaldir`, desc: "Rol ödülünü siler" },
-        { name: `/sicil`, desc: "Sicil kayıt kartı" },
+        { name: `${prefix}level`,       desc: "Seviye kartı" },
+        { name: `${prefix}lb`,          desc: "Liderboard görseli" },
+        { name: `/profil`,              desc: "Profil kartı" },
+        { name: `/leaderboard`,         desc: "Liderboard (slash)" },
+        { name: `/levelrol ekle`,       desc: "Seviye rol ödülü" },
+        { name: `/levelrol liste`,      desc: "Rol ödüllerini listeler" },
+        { name: `/levelrol kaldir`,     desc: "Rol ödülünü siler" },
       ],
     },
     {
-      label: "Kumarhane 🎰", icon: "💰", color: "#ffd700",
+      label: "Ekonomi 💰", icon: "💳", color: "#ffd700",
       commands: [
-        { name: `/gunlukodul`, desc: "Günlük coin al" },
-        { name: `/bakiye`, desc: "Coin bakiyesi" },
-        { name: `/transfer`, desc: "Coin gönder" },
-        { name: `/kumar`, desc: "Slot makinesi" },
-        { name: `/duel @kullanici`, desc: "1v1 yazı-tura düellosu" },
-        { name: `/rulet`, desc: "Kırmızı/siyah/sayı" },
+        { name: `/gunlukodul`,   desc: "Günlük coin al (global)" },
+        { name: `/bakiye`,       desc: "Coin bakiyesi (global)" },
+        { name: `/transfer`,     desc: "Coin gönder" },
+        { name: `/kumar`,        desc: "Slot makinesi" },
+        { name: `/duel @kişi`,  desc: "1v1 yazı-tura düellosu" },
+        { name: `/rulet`,        desc: "Kırmızı/siyah/sayı" },
       ],
     },
     {
-      label: "Eğlence", icon: "🎉", color: "#eb459e",
+      label: "Oyunlar 🎮", icon: "🎲", color: "#eb459e",
       commands: [
-        { name: `/rps @kullanici`, desc: "Taş-Kağıt-Makas" },
-        { name: `/8top <soru>`, desc: "Sihirli 8 top" },
-        { name: `/zar [adet]`, desc: "Zar at" },
-        { name: `/patla [@hedef]`, desc: "Patlat!" },
+        { name: `/coinflip`,       desc: "OWO tarzı coin düşürme" },
+        { name: `/blackjack`,      desc: "Solo veya 1v1 blackjack" },
+        { name: `/rps @kişi`,      desc: "TKM (bahisli opsiyonel)" },
+        { name: `/patla [@hedef]`, desc: "Patlat! (eğlence)" },
+        { name: `/zar [adet]`,     desc: "Zar at" },
+        { name: `/8top <soru>`,    desc: "Sihirli 8 top" },
       ],
     },
     {
-      label: "Ayarlar", icon: "⚙️", color: "#57f287",
+      label: "Sunucu Yönetimi", icon: "⚙️", color: "#57f287",
       commands: [
         { name: `${prefix}setprefix`, desc: "Prefix değiştir" },
-        { name: `${prefix}yardim`, desc: "Bu yardım kartı" },
-        { name: `${prefix}sunucukur`, desc: "Tüm kanalları kur" },
+        { name: `/sunucukur`,         desc: "Tüm kanalları oluştur" },
+        { name: `/sunucukopyala`,     desc: "Sunucu kopyala (ID)" },
+        { name: `/setprefix`,         desc: "Prefix değiştir (slash)" },
+        { name: `/ping`,              desc: "Bot gecikmesi" },
+        { name: `${prefix}yardim`,   desc: "Bu yardım kartı" },
       ],
     },
   ];
 
-  const W = 900;
+  const W = 940;
   const CMD_H = 26;
   const CAT_HEAD = 36;
   const PAD = 12;
   const COLS = 2;
   const COL_W = (W - 56) / COLS;
-  const colCats = [categories.slice(0, 2), categories.slice(2)];
+
+  // Kategorileri iki sütuna böl (dengeli)
+  const totalCmds = categories.reduce((s, c) => s + c.commands.length, 0);
+  const half = Math.ceil(totalCmds / 2);
+  let leftCmds = 0;
+  let splitIdx = 0;
+  for (let i = 0; i < categories.length; i++) {
+    if (leftCmds + categories[i]!.commands.length > half && leftCmds > 0) { splitIdx = i; break; }
+    leftCmds += categories[i]!.commands.length;
+    splitIdx = i + 1;
+  }
+  const colCats = [categories.slice(0, splitIdx), categories.slice(splitIdx)];
 
   function colH(cats: Category[]) {
     return cats.reduce((s, c) => s + CAT_HEAD + c.commands.length * CMD_H + PAD * 2 + 10, 0);
   }
 
   const HEADER_H = 92;
-  const FOOTER_H = 40;
+  const FOOTER_H = 44;
   const bodyH = Math.max(colH(colCats[0]!), colH(colCats[1]!));
   const H = HEADER_H + bodyH + FOOTER_H + 20;
 
@@ -96,8 +114,8 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
   bg.addColorStop(0,"#07070f"); bg.addColorStop(0.5,"#0d0d28"); bg.addColorStop(1,"#070712");
   roundRect(ctx,0,0,W,H,20); ctx.fillStyle=bg; ctx.fill();
 
-  // Glow
-  const g1 = ctx.createRadialGradient(W/2,0,0,W/2,0,260);
+  // Glow efektleri
+  const g1 = ctx.createRadialGradient(W/2,0,0,W/2,0,280);
   g1.addColorStop(0,"rgba(88,101,242,0.22)"); g1.addColorStop(1,"rgba(0,0,0,0)");
   ctx.fillStyle=g1; ctx.fillRect(0,0,W,H);
   const g2 = ctx.createRadialGradient(0,H,0,0,H,200);
@@ -115,7 +133,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
   ctx.fillStyle=tg; ctx.font="bold 34px sans-serif"; ctx.textAlign="center";
   ctx.fillText("📖  BOT KOMUT REHBERİ", W/2, 48);
   ctx.fillStyle="#72767d"; ctx.font="14px sans-serif";
-  ctx.fillText(`Prefix: ${prefix}komut  •  /slash komut  •  Her mesaj XP kazandırır`, W/2, 76);
+  ctx.fillText(`Prefix: ${prefix}komut  •  /slash komut  •  Ekonomi tüm sunucularda global`, W/2, 76);
   ctx.textAlign="left";
 
   // Başlık çizgisi
@@ -141,7 +159,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
       if(i%2===0){roundRect(ctx,x+6,ry-3,COL_W-12,CMD_H,5); ctx.fillStyle="rgba(255,255,255,0.03)"; ctx.fill();}
       ctx.fillStyle="#ffffff"; ctx.font="bold 12px sans-serif"; ctx.fillText(cmd.name, x+16, ry+12);
       ctx.fillStyle="#72767d"; ctx.font="11px sans-serif"; ctx.textAlign="right";
-      const d=cmd.desc.length>26?cmd.desc.slice(0,25)+"…":cmd.desc;
+      const d=cmd.desc.length>28?cmd.desc.slice(0,27)+"…":cmd.desc;
       ctx.fillText(d, x+COL_W-10, ry+12); ctx.textAlign="left";
     }
     return catH+10;
@@ -156,7 +174,8 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
   ctx.strokeStyle="rgba(255,255,255,0.06)"; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(20,fy); ctx.lineTo(W-20,fy); ctx.stroke();
   ctx.fillStyle="#72767d"; ctx.font="12px sans-serif"; ctx.textAlign="center";
-  ctx.fillText(`Ses kanalında her dakika XP • Seviye atladıkça profil kartı teması değişir • İlk coini /gunlukodul ile al`, W/2, fy+24);
+  ctx.fillText("💡 Bakiye tüm sunucularda ortaktır  •  Ses kanalında dakikada XP  •  Seviye atladıkça kart teması değişir", W/2, fy+22);
+  ctx.fillText(`Toplam ${categories.reduce((s,c)=>s+c.commands.length,0)} komut`, W/2, fy+38);
   ctx.textAlign="left";
 
   return canvas.toBuffer("image/png");

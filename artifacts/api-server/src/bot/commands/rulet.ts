@@ -17,18 +17,18 @@ export const data = new SlashCommandBuilder()
   .addIntegerOption((o) => o.setName("bahis").setDescription("Bahis miktarı (min 10)").setMinValue(10).setRequired(true));
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.guildId) { await interaction.reply({ content: "❌ Sadece sunucularda çalışır.", ephemeral: true }); return; }
   const secim = interaction.options.getString("secim", true).toLowerCase().trim();
-  const bet = interaction.options.getInteger("bahis", true);
+  const bet   = interaction.options.getInteger("bahis", true);
   await interaction.deferReply();
 
-  const bal = await getBalance(interaction.user.id, interaction.guildId);
+  const bal = await getBalance(interaction.user.id);
   if (bal.coins < bet) {
-    await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xed4245).setTitle("❌ Yetersiz Bakiye").setDescription(`Bakiyen: **${bal.coins.toLocaleString()}** 🪙`)] });
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0xed4245).setTitle("❌ Yetersiz Bakiye").setDescription(`Bakiyen: **${bal.coins.toLocaleString("tr-TR")} ⬤V**`)],
+    });
     return;
   }
 
-  // Validate seçim
   const validColors = ["kirmizi", "kırmızı", "siyah", "yesil", "yeşil"];
   const isNumber = /^\d+$/.test(secim) && Number(secim) >= 0 && Number(secim) <= 36;
   if (!validColors.includes(secim) && !isNumber) {
@@ -36,24 +36,20 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  const result = Math.floor(Math.random() * 37); // 0-36
+  const result = Math.floor(Math.random() * 37);
   const resultColor = getColor(result);
 
   let win = false;
   let multiplier = 0;
 
   if (isNumber) {
-    win = result === Number(secim);
-    multiplier = 36;
+    win = result === Number(secim); multiplier = 36;
   } else if (secim.startsWith("kır") || secim === "kirmizi") {
-    win = resultColor === "red";
-    multiplier = 2;
+    win = resultColor === "red"; multiplier = 2;
   } else if (secim === "siyah") {
-    win = resultColor === "black";
-    multiplier = 2;
+    win = resultColor === "black"; multiplier = 2;
   } else {
-    win = resultColor === "green";
-    multiplier = 35;
+    win = resultColor === "green"; multiplier = 35;
   }
 
   const colorEmoji = resultColor === "red" ? "🔴" : resultColor === "black" ? "⚫" : "🟢";
@@ -62,11 +58,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   if (win) {
     const profit = bet * multiplier - bet;
-    newBal = await addCoins(interaction.user.id, interaction.guildId, profit);
-    diffText = `+${profit.toLocaleString()}`;
+    newBal = await addCoins(interaction.user.id, profit);
+    diffText = `+${profit.toLocaleString("tr-TR")}`;
   } else {
-    newBal = await takeCoins(interaction.user.id, interaction.guildId, bet);
-    diffText = `-${bet.toLocaleString()}`;
+    newBal = await takeCoins(interaction.user.id, bet);
+    diffText = `-${bet.toLocaleString("tr-TR")}`;
   }
 
   const embed = new EmbedBuilder()
@@ -74,10 +70,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     .setTitle("🎡 Rulet")
     .setDescription(`Top düştü: **${colorEmoji} ${result}**\nSeçimin: **${secim}**\n\n${win ? "🏆 **KAZANDIN!**" : "💸 **Kaybettin!**"}`)
     .addFields(
-      { name: "Bahis", value: `${bet.toLocaleString()} 🪙`, inline: true },
-      { name: win ? "Kazanç" : "Kayıp", value: `${diffText} 🪙`, inline: true },
-      { name: "Çarpan", value: `x${multiplier}`, inline: true },
-      { name: "Yeni Bakiye", value: `**${newBal.toLocaleString()}** 🪙` },
+      { name: "Bahis",   value: `${bet.toLocaleString("tr-TR")} ⬤V`,   inline: true },
+      { name: win ? "Kazanç" : "Kayıp", value: `${diffText} ⬤V`,       inline: true },
+      { name: "Çarpan",  value: `x${multiplier}`,                       inline: true },
+      { name: "Yeni Bakiye", value: `**${newBal.toLocaleString("tr-TR")} ⬤V**` },
     )
     .setTimestamp();
 

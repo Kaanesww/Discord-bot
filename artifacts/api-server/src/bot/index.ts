@@ -15,37 +15,40 @@ import { logAction, getUserLogs } from "./moderation";
 import { getBalance, addCoins, claimDaily } from "./economy";
 
 // ── Slash komutları ───────────────────────────────────────────────────────────
-import * as kickCmd from "./commands/kick";
-import * as levelCmd from "./commands/level";
-import * as leaderboardCmd from "./commands/leaderboard";
-import * as setPrefixCmd from "./commands/setprefix";
-import * as profilCmd from "./commands/profil";
-import * as levelRolCmd from "./commands/levelrol";
-import * as banCmd from "./commands/ban";
-import * as unbanCmd from "./commands/unban";
-import * as timeoutCmd from "./commands/timeout";
-import * as untimeoutCmd from "./commands/untimeout";
-import * as warnCmd from "./commands/warn";
-import * as uyariKaldirCmd from "./commands/uyarikaldir";
-import * as sicilCmd from "./commands/sicil";
-import * as temizleCmd from "./commands/temizle";
-import * as yardimCmd from "./commands/yardim";
-import * as nukeCmd from "./commands/nuke";
-import * as kilitleCmd from "./commands/kilitle";
-import * as acCmd from "./commands/ac";
-import * as gunlukodulCmd from "./commands/gunlukodul";
-import * as bakiyeCmd from "./commands/bakiye";
-import * as transferCmd from "./commands/transfer";
-import * as kumarCmd from "./commands/kumar";
-import * as duelCmd from "./commands/duel";
-import * as ruletCmd from "./commands/rulet";
-import * as zarCmd from "./commands/zar";
-import * as top8Cmd from "./commands/top8";
-import * as rpsCmd from "./commands/rps";
-import * as patlaCmd from "./commands/patla";
-import * as coinflipCmd from "./commands/coinflip";
-import * as blackjackCmd from "./commands/blackjack";
+import * as kickCmd         from "./commands/kick";
+import * as levelCmd        from "./commands/level";
+import * as leaderboardCmd  from "./commands/leaderboard";
+import * as setPrefixCmd    from "./commands/setprefix";
+import * as profilCmd       from "./commands/profil";
+import * as levelRolCmd     from "./commands/levelrol";
+import * as banCmd          from "./commands/ban";
+import * as unbanCmd        from "./commands/unban";
+import * as timeoutCmd      from "./commands/timeout";
+import * as untimeoutCmd    from "./commands/untimeout";
+import * as warnCmd         from "./commands/warn";
+import * as uyariKaldirCmd  from "./commands/uyarikaldir";
+import * as sicilCmd        from "./commands/sicil";
+import * as temizleCmd      from "./commands/temizle";
+import * as yardimCmd       from "./commands/yardim";
+import * as nukeCmd         from "./commands/nuke";
+import * as kilitleCmd      from "./commands/kilitle";
+import * as acCmd           from "./commands/ac";
+import * as gunlukodulCmd   from "./commands/gunlukodul";
+import * as bakiyeCmd       from "./commands/bakiye";
+import * as transferCmd     from "./commands/transfer";
+import * as kumarCmd        from "./commands/kumar";
+import * as duelCmd         from "./commands/duel";
+import * as ruletCmd        from "./commands/rulet";
+import * as zarCmd          from "./commands/zar";
+import * as top8Cmd         from "./commands/top8";
+import * as rpsCmd          from "./commands/rps";
+import * as patlaCmd        from "./commands/patla";
+import * as coinflipCmd     from "./commands/coinflip";
+import * as blackjackCmd    from "./commands/blackjack";
 import * as sunucukopyalaCmd from "./commands/sunucukopyala";
+import * as sunucukurCmd    from "./commands/sunucukur";
+import * as pingCmd         from "./commands/ping";
+import * as kullanicibilgiCmd from "./commands/userinfo";
 import { isOwner } from "./ownerUtils";
 
 interface Command {
@@ -59,7 +62,8 @@ const SLASH_COMMANDS = [
   sicilCmd, temizleCmd, yardimCmd, nukeCmd, kilitleCmd, acCmd,
   gunlukodulCmd, bakiyeCmd, transferCmd, kumarCmd, duelCmd, ruletCmd,
   zarCmd, top8Cmd, rpsCmd, patlaCmd,
-  coinflipCmd, blackjackCmd, sunucukopyalaCmd,
+  coinflipCmd, blackjackCmd, sunucukopyalaCmd, sunucukurCmd,
+  pingCmd, kullanicibilgiCmd,
 ];
 
 const commands = new Collection<string, Command>();
@@ -110,7 +114,7 @@ async function pfxLevel(m: Message): Promise<void> {
   const ud = await getUserLevel(target.id, m.guildId);
   const rank = await getRank(target.id, m.guildId);
   const { current, needed } = xpToNextLevel(ud.xp, ud.level);
-  const bal = await getBalance(target.id, m.guildId).catch(() => ({ coins: 0 }));
+  const bal = await getBalance(target.id).catch(() => ({ coins: 0 }));
   const buf = await generateProfileCard({
     username: target.displayName,
     avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
@@ -240,17 +244,16 @@ const prefixHandlers: Record<string, (m: Message, args: string[]) => Promise<voi
     await m.reply(`⚠️ **${target.tag}** uyarıldı. Sebep: ${sebep} | #${log.id}`);
     try { await target.send(`⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`); } catch { /**/ }
   },
+  // Ekonomi global — guildId artık kullanılmıyor
   gunlukodul: async (m) => {
-    if (!m.guildId) return;
-    const r = await claimDaily(m.author.id, m.guildId);
+    const r = await claimDaily(m.author.id);
     if (r.alreadyClaimed) { await m.reply("⏰ Zaten aldın! 20 saat sonra tekrar dene."); return; }
-    const bal = await getBalance(m.author.id, m.guildId);
-    await m.reply(`🎁 **+${r.reward.toLocaleString("tr-TR")}** ⬤V | Seri: ${r.streak} gün | Bakiye: **${bal.coins.toLocaleString("tr-TR")} ⬤V**`);
+    const bal = await getBalance(m.author.id);
+    await m.reply(`🎁 **+${r.reward.toLocaleString("tr-TR")} ⬤V** | Seri: ${r.streak} gün | Bakiye: **${bal.coins.toLocaleString("tr-TR")} ⬤V**`);
   },
   bakiye: async (m) => {
-    if (!m.guildId) return;
     const target = m.mentions.users.first() ?? m.author;
-    const bal = await getBalance(target.id, m.guildId);
+    const bal = await getBalance(target.id);
     await m.reply(`💳 **${target.displayName}** — **${bal.coins.toLocaleString("tr-TR")} ⬤V** | Seri: ${bal.streak} gün`);
   },
   setprefix: async (m, args) => {
@@ -262,14 +265,19 @@ const prefixHandlers: Record<string, (m: Message, args: string[]) => Promise<voi
     await setPrefixUtil(m.guildId, np);
     await m.reply(`✅ Prefix **\`${old}\`** → **\`${np}\`** olarak değiştirildi.`);
   },
+  ping: async (m) => {
+    const msg = await m.reply("🏓 Ölçülüyor...");
+    const lat = msg.createdTimestamp - m.createdTimestamp;
+    await msg.edit(`🏓 **Pong!** Round-trip: **${lat}ms** | API: **${Math.round(m.client.ws.ping)}ms**`);
+  },
 };
 
 // ── Bot başlatma ──────────────────────────────────────────────────────────────
 
 export async function startBot(): Promise<void> {
-  const token = process.env["DISCORD_TOKEN"];
+  const token    = process.env["DISCORD_TOKEN"];
   const clientId = process.env["DISCORD_CLIENT_ID"];
-  if (!token) { logger.warn("DISCORD_TOKEN eksik — bot başlamayacak."); return; }
+  if (!token)    { logger.warn("DISCORD_TOKEN eksik — bot başlamayacak."); return; }
   if (!clientId) { logger.warn("DISCORD_CLIENT_ID eksik — bot başlamayacak."); return; }
 
   const rest = new REST().setToken(token);
@@ -287,13 +295,11 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
-
     c.user.setPresence({ status: "online", activities: [{ name: "VBRI and TURKLAND", type: 3 }] });
 
     const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot+applications.commands`;
     logger.info({ inviteUrl }, "Davet URL:");
 
-    // Global slash komut kaydı
     try {
       await rest.put(Routes.applicationCommands(clientId), { body: commandData });
       logger.info({ count: commandData.length }, `✅ ${commandData.length} global slash komut kaydedildi`);
@@ -304,17 +310,14 @@ export async function startBot(): Promise<void> {
 
   // ── Ses XP ───────────────────────────────────────────────────────────────
   client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-    const userId = newState.member?.id ?? oldState.member?.id;
+    const userId  = newState.member?.id ?? oldState.member?.id;
     const guildId = newState.guild.id;
     if (!userId || newState.member?.user.bot) return;
     const key = `${userId}:${guildId}`;
 
-    const joinedChannel = !oldState.channelId && newState.channelId;
-    const leftChannel = oldState.channelId && !newState.channelId;
-
-    if (joinedChannel) {
+    if (!oldState.channelId && newState.channelId) {
       voiceSessions.set(key, Date.now());
-    } else if (leftChannel) {
+    } else if (oldState.channelId && !newState.channelId) {
       const start = voiceSessions.get(key);
       if (!start) return;
       voiceSessions.delete(key);

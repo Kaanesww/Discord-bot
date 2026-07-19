@@ -26,19 +26,20 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.guildId) { await interaction.reply({ content: "❌ Sadece sunucularda çalışır.", ephemeral: true }); return; }
-
   const opponent = interaction.options.getUser("rakip", true);
   const bet      = interaction.options.getInteger("miktar") ?? 0;
 
-  if (opponent.id === interaction.user.id) { await interaction.reply({ content: "❌ Kendinle oynayamazsın.", ephemeral: true }); return; }
-  if (opponent.bot) { await interaction.reply({ content: "❌ Botlarla oynayamazsın.", ephemeral: true }); return; }
+  if (opponent.id === interaction.user.id) {
+    await interaction.reply({ content: "❌ Kendinle oynayamazsın.", ephemeral: true }); return;
+  }
+  if (opponent.bot) {
+    await interaction.reply({ content: "❌ Botlarla oynayamazsın.", ephemeral: true }); return;
+  }
 
   const hasBet = bet > 0;
 
-  // Bahis kontrolü
   if (hasBet) {
-    const bal1 = await getBalance(interaction.user.id, interaction.guildId);
+    const bal1 = await getBalance(interaction.user.id);
     if (bal1.coins < bet) {
       await interaction.reply({ content: `❌ Yetersiz bakiye! Bakiyen: **${bal1.coins.toLocaleString("tr-TR")} ⬤V**`, ephemeral: true }); return;
     }
@@ -51,21 +52,23 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     ),
   );
 
-  // Daveti gönder — rakip önce kabul etsin (bahis varsa)
   if (hasBet) {
     const acceptRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId("rps_accept").setLabel("✅ Kabul Et").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("rps_decline").setLabel("❌ Reddet").setStyle(ButtonStyle.Danger),
     );
     const invMsg = await interaction.reply({
-      content:
-        `${opponent} — **${interaction.user.displayName}** sana **${bet.toLocaleString("tr-TR")} ⬤V** bahisli TKM daveti gönderdi!\nKabul ediyor musun? *(30 sn)*`,
+      content: `${opponent} — **${interaction.user.displayName}** sana **${bet.toLocaleString("tr-TR")} ⬤V** bahisli TKM daveti gönderdi!\nKabul ediyor musun? *(30 sn)*`,
       components: [acceptRow],
       fetchReply: true,
     });
 
     try {
-      const invBtn = await invMsg.awaitMessageComponent({ componentType: ComponentType.Button, filter: (i) => i.user.id === opponent.id, time: 30_000 });
+      const invBtn = await invMsg.awaitMessageComponent({
+        componentType: ComponentType.Button,
+        filter: (i) => i.user.id === opponent.id,
+        time: 30_000,
+      });
       if (invBtn.customId === "rps_decline") {
         await invBtn.update({ content: `❌ **${opponent.displayName}** daveti reddetti.`, components: [] }); return;
       }
@@ -74,14 +77,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       await interaction.editReply({ content: "⏰ Süre doldu. Oyun iptal.", components: [] }); return;
     }
 
-    // Rakibin bakiyesini kontrol et
-    const bal2 = await getBalance(opponent.id, interaction.guildId);
+    const bal2 = await getBalance(opponent.id);
     if (bal2.coins < bet) {
       await interaction.editReply({ content: `❌ **${opponent.displayName}** bakiyesi yetersiz! (${bal2.coins.toLocaleString("tr-TR")} ⬤V)`, components: [] }); return;
     }
   }
 
-  // ── Seçim ekranı ──────────────────────────────────────────
   const p1Choice = new Map<string, Choice>();
 
   const statusEmbed = () => new EmbedBuilder()
@@ -109,21 +110,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
     p1Choice.set(i.user.id, i.customId as Choice);
     await i.reply({ content: `✅ **${EMOJI[i.customId as Choice]} ${i.customId}** seçtin! Rakip seçene kadar bekle.`, ephemeral: true });
-    // Durumu güncelle
     await interaction.editReply({ embeds: [statusEmbed()], components: [makeRow()] });
-
-    if (p1Choice.has(interaction.user.id) && p1Choice.has(opponent.id)) {
-      collector.stop("both_chosen");
-    }
+    if (p1Choice.has(interaction.user.id) && p1Choice.has(opponent.id)) collector.stop("both_chosen");
   });
 
   collector.on("end", async (_, reason) => {
     if (reason !== "both_chosen") {
       const who = !p1Choice.has(interaction.user.id) ? interaction.user.displayName : opponent.displayName;
-      await interaction.editReply({
-        embeds: [new EmbedBuilder().setColor(0x72767d).setTitle("⏰ Süre Doldu").setDescription(`**${who}** seçim yapmadı. Oyun iptal.`)],
-        components: [],
-      });
+      await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x72767d).setTitle("⏰ Süre Doldu").setDescription(`**${who}** seçim yapmadı. Oyun iptal.`)], components: [] });
       return;
     }
 
@@ -131,7 +125,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const c2 = p1Choice.get(opponent.id)!;
     const result = getWinner(c1, c2);
 
-    let desc: string;
+    let desc = "";
     let winnerId: string | null = null;
     let loserId:  string | null = null;
 
@@ -145,14 +139,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       winnerId = opponent.id; loserId = interaction.user.id;
     }
 
-    // Bahis transferi
     let extraLines = "";
-    if (hasBet && interaction.guildId) {
+    if (hasBet) {
       if (winnerId && loserId) {
-        await addCoins(winnerId, interaction.guildId, bet);
-        await takeCoins(loserId,  interaction.guildId, bet);
-        const wb = await getBalance(winnerId, interaction.guildId);
-        const lb = await getBalance(loserId,  interaction.guildId);
+        await addCoins(winnerId, bet);
+        await takeCoins(loserId, bet);
+        const wb = await getBalance(winnerId);
+        const lb = await getBalance(loserId);
         const wName = winnerId === interaction.user.id ? interaction.user.displayName : opponent.displayName;
         const lName = loserId  === interaction.user.id ? interaction.user.displayName : opponent.displayName;
         extraLines =
@@ -169,7 +162,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .setDescription(desc + extraLines)
       .addFields(
         { name: interaction.user.displayName, value: `${EMOJI[c1]} ${c1}`, inline: true },
-        { name: opponent.displayName, value: `${EMOJI[c2]} ${c2}`, inline: true },
+        { name: opponent.displayName,         value: `${EMOJI[c2]} ${c2}`, inline: true },
       )
       .setTimestamp();
 

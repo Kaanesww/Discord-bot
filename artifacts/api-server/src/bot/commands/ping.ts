@@ -1,20 +1,14 @@
-import { SlashCommandBuilder } from "discord.js";
-import type { Command } from "../types";
+import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 
-export const ping: Command = {
-  data: new SlashCommandBuilder()
-    .setName("ping")
-    .setDescription("Check the bot's latency"),
+export const data = new SlashCommandBuilder()
+  .setName("ping")
+  .setDescription("🏓 Botun gecikmesini ölçer");
 
-  async execute(interaction) {
-    const sent = await interaction.reply({
-      content: "🏓 Pinging...",
-      fetchReply: true,
-    });
-    const latency = sent.createdTimestamp - interaction.createdTimestamp;
-    const apiLatency = Math.round(interaction.client.ws.ping);
-    await interaction.editReply(
-      `🏓 Pong!\n> Round-trip: **${latency}ms**\n> API latency: **${apiLatency}ms**`,
-    );
-  },
-};
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  const sent = await interaction.reply({ content: "🏓 Ölçülüyor...", fetchReply: true });
+  const latency = sent.createdTimestamp - interaction.createdTimestamp;
+  const api = Math.round(interaction.client.ws.ping);
+  await interaction.editReply(
+    `🏓 **Pong!**\n> ⚡ Round-trip: **${latency}ms**\n> 🌐 API gecikmesi: **${api}ms**`,
+  );
+}

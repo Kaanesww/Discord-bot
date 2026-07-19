@@ -39,9 +39,7 @@ function handValue(hand: Card[]): number {
 }
 function cardStr(c: Card): string { return `\`${c.rank}${c.suit}\``; }
 function handStr(hand: Card[], hideAfter?: number): string {
-  return hand
-    .map((c, i) => (hideAfter !== undefined && i >= hideAfter ? "`🂠`" : cardStr(c)))
-    .join(" ");
+  return hand.map((c, i) => (hideAfter !== undefined && i >= hideAfter ? "`🂠`" : cardStr(c))).join(" ");
 }
 function statusLine(v: number): string {
   if (v > 21) return "💥 Battı!";
@@ -49,30 +47,29 @@ function statusLine(v: number): string {
   return `${v}`;
 }
 
-// ── Oyun durumu ───────────────────────────────────────────────────────────────
+// ── Oyun durumu (guildId kaldırıldı — ekonomi globaldir) ─────────────────────
 interface BJSoloGame {
   mode: "solo";
   deck: Card[];
   playerHand: Card[];
   dealerHand: Card[];
   bet: number;
-  guildId: string;
   userId: string;
   doubled: boolean;
 }
 interface BJ1v1Game {
   mode: "1v1";
   deck: Card[];
-  hand1: Card[];   // challenger
-  hand2: Card[];   // opponent
+  hand1: Card[];
+  hand2: Card[];
   bet: number;
-  guildId: string;
   user1Id: string;
   user2Id: string;
-  turn: 1 | 2;     // kimin sırası
+  turn: 1 | 2;
 }
 type BJGame = BJSoloGame | BJ1v1Game;
 
+// Oyun anahtarı artık sadece userId (ekonomi global)
 const activeGames = new Map<string, BJGame>();
 
 // ── Butonlar ──────────────────────────────────────────────────────────────────
@@ -112,8 +109,7 @@ async function finishSolo(
   g: BJSoloGame,
   reason: "bust" | "stand" | "bj",
 ): Promise<void> {
-  const key = `${g.userId}:${g.guildId}`;
-  activeGames.delete(key);
+  activeGames.delete(g.userId);
   const pv = handValue(g.playerHand);
 
   let resultMsg: string; let color: number; let balDiff: number;
@@ -121,21 +117,21 @@ async function finishSolo(
   if (reason === "bust") {
     resultMsg = "💥 **Battın!** 21'i geçtin.";
     color = 0xed4245; balDiff = -g.bet;
-    await takeCoins(g.userId, g.guildId, g.bet);
+    await takeCoins(g.userId, g.bet);
   } else if (reason === "bj" && pv === 21) {
     resultMsg = "🌟 **BLACKJACK!** 1.5x kazandın!";
     color = 0xffd700; balDiff = Math.round(g.bet * 1.5);
-    await addCoins(g.userId, g.guildId, balDiff);
+    await addCoins(g.userId, balDiff);
   } else {
     while (handValue(g.dealerHand) < 17) g.dealerHand.push(draw(g.deck));
     const dv = handValue(g.dealerHand);
-    if (dv > 21)      { resultMsg = "🎉 **Krupiye battı!** Kazandın!"; color = 0x57f287; balDiff = g.bet;  await addCoins(g.userId, g.guildId, g.bet); }
-    else if (pv > dv) { resultMsg = "🎉 **Kazandın!**";               color = 0x57f287; balDiff = g.bet;  await addCoins(g.userId, g.guildId, g.bet); }
+    if (dv > 21)       { resultMsg = "🎉 **Krupiye battı!** Kazandın!"; color = 0x57f287; balDiff = g.bet;  await addCoins(g.userId, g.bet); }
+    else if (pv > dv)  { resultMsg = "🎉 **Kazandın!**";               color = 0x57f287; balDiff = g.bet;  await addCoins(g.userId, g.bet); }
     else if (pv === dv){ resultMsg = "🤝 **Beraberlik!** Bahis iade."; color = 0xfaa61a; balDiff = 0; }
-    else              { resultMsg = "💸 **Kaybettin!**";              color = 0xed4245; balDiff = -g.bet; await takeCoins(g.userId, g.guildId, g.bet); }
+    else               { resultMsg = "💸 **Kaybettin!**";              color = 0xed4245; balDiff = -g.bet; await takeCoins(g.userId, g.bet); }
   }
 
-  const newBal = await getBalance(g.userId, g.guildId);
+  const newBal = await getBalance(g.userId);
   const e = soloEmbed(g, true, resultMsg, color);
   e.addFields(
     { name: balDiff >= 0 ? "💰 Kazanç" : "💸 Kayıp", value: `${balDiff >= 0 ? "+" : ""}${balDiff.toLocaleString("tr-TR")} ⬤V`, inline: true },
@@ -175,19 +171,20 @@ export const data = new SlashCommandBuilder()
   .addUserOption((o) => o.setName("rakip").setDescription("Gerçek rakip (boş = krupiye)").setRequired(false));
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  if (!interaction.guildId) { await interaction.reply({ content: "❌ Sadece sunucularda çalışır.", ephemeral: true }); return; }
   const bet      = interaction.options.getInteger("miktar", true);
   const opponent = interaction.options.getUser("rakip") as User | null;
-  const key1     = `${interaction.user.id}:${interaction.guildId}`;
+  const key1     = interaction.user.id; // global anahtar
 
-  if (activeGames.has(key1)) { await interaction.reply({ content: "❌ Zaten aktif bir oyunun var!", ephemeral: true }); return; }
+  if (activeGames.has(key1)) {
+    await interaction.reply({ content: "❌ Zaten aktif bir oyunun var!", ephemeral: true }); return;
+  }
 
   // ═══════════════════════════════════════════════════════════
   //  SOLO (krupiye karşı)
   // ═══════════════════════════════════════════════════════════
   if (!opponent || opponent.id === interaction.user.id || opponent.bot) {
     await interaction.deferReply();
-    const bal = await getBalance(interaction.user.id, interaction.guildId);
+    const bal = await getBalance(interaction.user.id);
     if (bal.coins < bet) {
       await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xed4245).setDescription(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("tr-TR")} ⬤V**`)] });
       return;
@@ -195,7 +192,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const deck = shuffle(newDeck());
     const playerHand: Card[] = [draw(deck), draw(deck)];
     const dealerHand: Card[] = [draw(deck), draw(deck)];
-    const g: BJSoloGame = { mode: "solo", deck, playerHand, dealerHand, bet, guildId: interaction.guildId, userId: interaction.user.id, doubled: false };
+    const g: BJSoloGame = { mode: "solo", deck, playerHand, dealerHand, bet, userId: interaction.user.id, doubled: false };
     activeGames.set(key1, g);
 
     if (handValue(playerHand) === 21) {
@@ -207,6 +204,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await interaction.editReply({ embeds: [soloEmbed(g)], components: [makeButtons(canDouble)] });
     const msg = await interaction.fetchReply();
     const collector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, filter: (i) => i.user.id === interaction.user.id, time: 120_000 });
+
     collector.on("collect", async (btn) => {
       await btn.deferUpdate();
       const gg = activeGames.get(key1) as BJSoloGame | undefined; if (!gg) return;
@@ -215,17 +213,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         gg.playerHand.push(draw(gg.deck));
         const pv = handValue(gg.playerHand);
         if (pv > 21 || pv === 21 || gg.doubled) { collector.stop(pv > 21 ? "bust" : "stand"); return; }
-        const cb = await getBalance(interaction.user.id, interaction.guildId);
+        const cb = await getBalance(interaction.user.id);
         await interaction.editReply({ embeds: [soloEmbed(gg)], components: [makeButtons(!gg.doubled && cb.coins >= gg.bet * 2)] });
       }
       if (btn.customId === "bj_stand") collector.stop("stand");
     });
+
     collector.on("end", async (_c, reason) => {
       const gg = activeGames.get(key1) as BJSoloGame | undefined; if (!gg) return;
       if (reason === "time") {
         activeGames.delete(key1);
-        await takeCoins(gg.userId, gg.guildId, gg.bet);
-        const b = await getBalance(gg.userId, gg.guildId);
+        await takeCoins(gg.userId, gg.bet);
+        const b = await getBalance(gg.userId);
         await interaction.editReply({ embeds: [soloEmbed(gg, true, "⏰ Süre doldu — bahis alındı.", 0x72767d).addFields({ name: "Bakiye", value: `**${b.coins.toLocaleString("tr-TR")} ⬤V**` })], components: [disabledButtons()] });
         return;
       }
@@ -237,11 +236,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   // ═══════════════════════════════════════════════════════════
   //  1v1 MOD
   // ═══════════════════════════════════════════════════════════
-  if (activeGames.has(`${opponent.id}:${interaction.guildId}`)) {
+  if (activeGames.has(opponent.id)) {
     await interaction.reply({ content: "❌ Rakibin zaten aktif bir oyunu var!", ephemeral: true }); return;
   }
-  const bal1 = await getBalance(interaction.user.id, interaction.guildId);
-  if (bal1.coins < bet) { await interaction.reply({ content: `❌ Yetersiz bakiye: **${bal1.coins.toLocaleString("tr-TR")} ⬤V**`, ephemeral: true }); return; }
+  const bal1 = await getBalance(interaction.user.id);
+  if (bal1.coins < bet) {
+    await interaction.reply({ content: `❌ Yetersiz bakiye: **${bal1.coins.toLocaleString("tr-TR")} ⬤V**`, ephemeral: true }); return;
+  }
 
   const inviteRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("bj1v1_accept").setLabel("✅ Kabul Et").setStyle(ButtonStyle.Success),
@@ -263,23 +264,21 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await interaction.editReply({ content: "⏰ Süre doldu. Oyun iptal.", components: [] }); return;
   }
 
-  const bal2 = await getBalance(opponent.id, interaction.guildId);
+  const bal2 = await getBalance(opponent.id);
   if (bal2.coins < bet) {
-    await interaction.editReply({ content: `❌ **${opponent.displayName}** bakiyesi yetersiz!`, components: [] }); return;
+    await interaction.editReply({ content: `❌ **${opponent.displayName}** bakiyesi yetersiz! (${bal2.coins.toLocaleString("tr-TR")} ⬤V)`, components: [] }); return;
   }
 
-  // Kart dağıt
   const deck = shuffle(newDeck());
   const hand1: Card[] = [draw(deck), draw(deck)];
   const hand2: Card[] = [draw(deck), draw(deck)];
   const g1v1: BJ1v1Game = {
     mode: "1v1", deck, hand1, hand2, bet,
-    guildId: interaction.guildId,
     user1Id: interaction.user.id,
     user2Id: opponent.id,
     turn: 1,
   };
-  const key2 = `${opponent.id}:${interaction.guildId}`;
+  const key2 = opponent.id;
   activeGames.set(key1, g1v1);
   activeGames.set(key2, g1v1);
 
@@ -294,8 +293,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const gameMsg = await interaction.fetchReply();
 
-  // ── Oyun döngüsü ──────────────────────────────────────────
-  async function playTurn(turnOwner: User, otherUser: User): Promise<"bust" | "stand"> {
+  async function playTurn(turnOwner: User): Promise<"bust" | "stand"> {
     return new Promise((resolve) => {
       const filter = (i: { user: { id: string } }) => i.user.id === turnOwner.id;
       const coll = gameMsg.createMessageComponentCollector({ componentType: ComponentType.Button, filter, time: 90_000 });
@@ -324,16 +322,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Oyuncu 1
-  const res1 = await playTurn(user1, user2);
+  const res1 = await playTurn(user1);
   g1v1.turn = 2;
 
   const v1after = handValue(g1v1.hand1);
   if (res1 === "bust") {
-    // Oyuncu 1 battı, oyuncu 2 kazandı
-    await addCoins(user2.id, interaction.guildId, bet);
-    await takeCoins(user1.id, interaction.guildId, bet);
-    const b1 = await getBalance(user1.id, interaction.guildId);
-    const b2 = await getBalance(user2.id, interaction.guildId);
+    await addCoins(user2.id, bet);
+    await takeCoins(user1.id, bet);
+    const b1 = await getBalance(user1.id);
+    const b2 = await getBalance(user2.id);
     activeGames.delete(key1); activeGames.delete(key2);
     await interaction.editReply({
       content:
@@ -346,17 +343,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  // Oyuncu 2'nin sırası
   await interaction.editReply({
     content: `🃏 Sıra: **${user2.displayName}**`,
     embeds: [make1v1Embed(g1v1, user1, user2)],
     components: [makeButtons(false)],
   });
 
-  const res2 = await playTurn(user2, user1);
+  const res2 = await playTurn(user2);
   const v2after = handValue(g1v1.hand2);
 
-  // Sonuç
   activeGames.delete(key1); activeGames.delete(key2);
 
   let resultMsg: string; let winnerId: string | null = null; let loserId: string | null = null;
@@ -375,14 +370,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   let b1coins = 0; let b2coins = 0;
   if (winnerId && loserId) {
-    await addCoins(winnerId, interaction.guildId, bet);
-    await takeCoins(loserId,  interaction.guildId, bet);
-    b1coins = (await getBalance(user1.id, interaction.guildId)).coins;
-    b2coins = (await getBalance(user2.id, interaction.guildId)).coins;
-  } else {
-    b1coins = (await getBalance(user1.id, interaction.guildId)).coins;
-    b2coins = (await getBalance(user2.id, interaction.guildId)).coins;
+    await addCoins(winnerId, bet);
+    await takeCoins(loserId,  bet);
   }
+  b1coins = (await getBalance(user1.id)).coins;
+  b2coins = (await getBalance(user2.id)).coins;
 
   await interaction.editReply({
     content:
