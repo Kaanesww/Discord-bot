@@ -997,15 +997,13 @@ export async function startBot(): Promise<void> {
     const { customId } = interaction;
     if (!customId.startsWith("help_")) return;
 
-    await interaction.deferReply({ ephemeral: true });
-
     const prefix = interaction.guildId
       ? await getPrefix(interaction.guildId).catch(() => "v!")
       : "v!";
 
     if (customId === "help_overview") {
       const buf = await generateHelpCard(prefix);
-      await interaction.editReply({
+      await interaction.update({
         files: [new AttachmentBuilder(buf, { name: "yardim.png" })],
         components: buildHelpButtons(),
       });
@@ -1015,7 +1013,7 @@ export async function startBot(): Promise<void> {
     const catKey = customId.replace("help_cat_", "");
     const buf = await generateCategoryHelpCard(prefix, catKey);
     if (!buf) {
-      await interaction.editReply({ content: "❌ Kategori bulunamadı." });
+      await interaction.update({ content: "❌ Kategori bulunamadı.", components: [] });
       return;
     }
 
@@ -1025,7 +1023,7 @@ export async function startBot(): Promise<void> {
         .setLabel("◀ Tüm Kategoriler")
         .setStyle(ButtonStyle.Primary)
     );
-    await interaction.editReply({
+    await interaction.update({
       files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })],
       components: [backRow],
     });
