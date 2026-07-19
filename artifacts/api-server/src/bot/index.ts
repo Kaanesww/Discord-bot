@@ -45,6 +45,7 @@ import * as rpsCmd from "./commands/rps";
 import * as patlaCmd from "./commands/patla";
 import * as coinflipCmd from "./commands/coinflip";
 import * as blackjackCmd from "./commands/blackjack";
+import * as sunucukopyalaCmd from "./commands/sunucukopyala";
 import { isOwner } from "./ownerUtils";
 
 interface Command {
@@ -58,7 +59,7 @@ const SLASH_COMMANDS = [
   sicilCmd, temizleCmd, yardimCmd, nukeCmd, kilitleCmd, acCmd,
   gunlukodulCmd, bakiyeCmd, transferCmd, kumarCmd, duelCmd, ruletCmd,
   zarCmd, top8Cmd, rpsCmd, patlaCmd,
-  coinflipCmd, blackjackCmd,
+  coinflipCmd, blackjackCmd, sunucukopyalaCmd,
 ];
 
 const commands = new Collection<string, Command>();
