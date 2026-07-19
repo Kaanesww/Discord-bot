@@ -68,8 +68,8 @@ function fetchInfo(query: string): Promise<YtInfo> {
       "--no-playlist",
       "--quiet",
       "--no-warnings",
-      "-f",
-      "bestaudio",
+      "-f", "bestaudio",
+      "--extractor-args", "youtube:player_client=tv_embedded,android",
       target,
     ]);
 
@@ -101,12 +101,12 @@ function createFfmpegStream(videoUrl: string): Promise<NodeJS.ReadableStream> {
   return new Promise((resolve, reject) => {
     // Önce yt-dlp'den stream URL'sini al
     const ytProc = spawn(ytdlpBin(), [
-      "-f",
-      "bestaudio",
+      "-f", "bestaudio",
       "--get-url",
       "--no-playlist",
       "--quiet",
       "--no-warnings",
+      "--extractor-args", "youtube:player_client=tv_embedded,android",
       videoUrl,
     ]);
 
