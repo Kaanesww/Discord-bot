@@ -1,7 +1,7 @@
 import {
-  Client, Collection, Events, GatewayIntentBits,
+  Client, Events, GatewayIntentBits,
   AttachmentBuilder, TextChannel, ChannelType,
-  PermissionFlagsBits,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle,
   type Message,
 } from "discord.js";
 import { logger } from "../lib/logger";
@@ -11,7 +11,7 @@ import { generateProfileCard } from "./profileCard";
 import { generateLeaderboardCard, type LeaderboardEntry } from "./leaderboardCard";
 import { generateLevelUpCard } from "./levelUpCard";
 import { generateSicilCard } from "./sicilCard";
-import { generateHelpCard, generateCategoryHelpCard } from "./helpCard";
+import { generateHelpCard, generateCategoryHelpCard, HELP_CATEGORIES } from "./helpCard";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
 import { getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll } from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying } from "./music";
@@ -810,6 +810,27 @@ async function pfxPing(m: Message): Promise<void> {
   await msg.edit(`🏓 **Pong!** Round-trip: **${lat}ms** | API: **${Math.round(m.client.ws.ping)}ms**`);
 }
 
+function buildHelpButtons(): ActionRowBuilder<ButtonBuilder>[] {
+  // 6 kategori → 2 sıra: 3 + 3
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    HELP_CATEGORIES.slice(0, 3).map((cat) =>
+      new ButtonBuilder()
+        .setCustomId(`help_cat_${cat.key}`)
+        .setLabel(`${cat.icon} ${cat.label}`)
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    HELP_CATEGORIES.slice(3).map((cat) =>
+      new ButtonBuilder()
+        .setCustomId(`help_cat_${cat.key}`)
+        .setLabel(`${cat.icon} ${cat.label}`)
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+  return [row1, row2];
+}
+
 async function pfxYardim(m: Message, args: string[]): Promise<void> {
   const prefix = m.guildId ? await getPrefix(m.guildId).catch(() => "v!") : "v!";
   const catKey = args[0]?.toLowerCase();
@@ -819,10 +840,23 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
       await m.reply(`❌ Kategori bulunamadı. Mevcut kategoriler: \`moderasyon\` \`seviye\` \`ekonomi\` \`oyunlar\` \`muzik\` \`yonetim\``);
       return;
     }
-    await m.reply({ files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })] });
+    // Kategori kartı + geri dön butonu
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("help_overview")
+        .setLabel("◀ Tüm Kategoriler")
+        .setStyle(ButtonStyle.Primary)
+    );
+    await m.reply({
+      files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })],
+      components: [backRow],
+    });
   } else {
     const buf = await generateHelpCard(prefix);
-    await m.reply({ files: [new AttachmentBuilder(buf, { name: "yardim.png" })] });
+    await m.reply({
+      files: [new AttachmentBuilder(buf, { name: "yardim.png" })],
+      components: buildHelpButtons(),
+    });
   }
 }
 
@@ -955,6 +989,46 @@ export async function startBot(): Promise<void> {
         }
       }
     }
+  });
+
+  // ── Yardım butonu etkileşimleri ──────────────────────────────────────────
+  client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isButton()) return;
+    const { customId } = interaction;
+    if (!customId.startsWith("help_")) return;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const prefix = interaction.guildId
+      ? await getPrefix(interaction.guildId).catch(() => "v!")
+      : "v!";
+
+    if (customId === "help_overview") {
+      const buf = await generateHelpCard(prefix);
+      await interaction.editReply({
+        files: [new AttachmentBuilder(buf, { name: "yardim.png" })],
+        components: buildHelpButtons(),
+      });
+      return;
+    }
+
+    const catKey = customId.replace("help_cat_", "");
+    const buf = await generateCategoryHelpCard(prefix, catKey);
+    if (!buf) {
+      await interaction.editReply({ content: "❌ Kategori bulunamadı." });
+      return;
+    }
+
+    const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("help_overview")
+        .setLabel("◀ Tüm Kategoriler")
+        .setStyle(ButtonStyle.Primary)
+    );
+    await interaction.editReply({
+      files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })],
+      components: [backRow],
+    });
   });
 
   // ── Mesaj XP + Prefix komutlar ───────────────────────────────────────────
