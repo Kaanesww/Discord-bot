@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   joinVoiceChannel,
   createAudioPlayer,
@@ -8,8 +9,8 @@ import {
   getVoiceConnection,
   entersState,
   NoSubscriberBehavior,
+  StreamType,
 } from "@discordjs/voice";
-import play from "play-dl";
 import type { VoiceBasedChannel, TextBasedChannel } from "discord.js";
 import { logger } from "../lib/logger";
 
@@ -30,21 +31,129 @@ interface GuildQueue {
 
 const queues = new Map<string, GuildQueue>();
 
+// ── yt-dlp yardımcıları ───────────────────────────────────────────────────────
+
+function ytdlpBin(): string {
+  // Nix ile kurulan yt-dlp
+  return "yt-dlp";
+}
+
 function formatDuration(sec: number): string {
   if (!sec || sec < 0) return "?:??";
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  if (h > 0)
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+interface YtInfo {
+  title: string;
+  webpage_url: string;
+  duration: number;
+  thumbnail: string;
+}
+
+/** yt-dlp ile video bilgisi al (URL veya arama sorgusu) */
+function fetchInfo(query: string): Promise<YtInfo> {
+  return new Promise((resolve, reject) => {
+    // YouTube URL mi yoksa arama sorgusu mu?
+    const isUrl =
+      query.startsWith("http://") || query.startsWith("https://");
+    const target = isUrl ? query : `ytsearch1:${query}`;
+
+    const proc = spawn(ytdlpBin(), [
+      "--dump-json",
+      "--no-playlist",
+      "--quiet",
+      "--no-warnings",
+      "-f",
+      "bestaudio",
+      target,
+    ]);
+
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(`yt-dlp hata (${code}): ${stderr.trim()}`));
+      }
+      try {
+        // Birden fazla JSON satırı varsa ilkini al
+        const line = stdout.trim().split("\n")[0]!;
+        const data = JSON.parse(line) as YtInfo;
+        resolve(data);
+      } catch (e) {
+        reject(new Error("yt-dlp JSON parse hatası"));
+      }
+    });
+
+    proc.on("error", (e) => reject(e));
+  });
+}
+
+/** yt-dlp ile ses stream URL'si al, ffmpeg ile Opus'a çevir */
+function createFfmpegStream(videoUrl: string): Promise<NodeJS.ReadableStream> {
+  return new Promise((resolve, reject) => {
+    // Önce yt-dlp'den stream URL'sini al
+    const ytProc = spawn(ytdlpBin(), [
+      "-f",
+      "bestaudio",
+      "--get-url",
+      "--no-playlist",
+      "--quiet",
+      "--no-warnings",
+      videoUrl,
+    ]);
+
+    let streamUrl = "";
+    let ytErr = "";
+    ytProc.stdout.on("data", (d: Buffer) => (streamUrl += d.toString()));
+    ytProc.stderr.on("data", (d: Buffer) => (ytErr += d.toString()));
+
+    ytProc.on("close", (code) => {
+      const url = streamUrl.trim().split("\n")[0]!;
+      if (code !== 0 || !url) {
+        return reject(
+          new Error(`Stream URL alınamadı (${code}): ${ytErr.trim()}`)
+        );
+      }
+
+      // ffmpeg ile URL'yi ham PCM'e çevir
+      const ff = spawn("ffmpeg", [
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+        "-i", url,
+        "-f", "s16le",   // ham 16-bit little-endian PCM
+        "-ar", "48000",  // Discord 48kHz
+        "-ac", "2",      // stereo
+        "-loglevel", "quiet",
+        "pipe:1",
+      ]);
+
+      ff.on("error", (e) => reject(e));
+      ff.stderr.on("data", () => null); // loglamayı bastır
+
+      // ffmpeg stdout'u sağla
+      resolve(ff.stdout as unknown as NodeJS.ReadableStream);
+    });
+
+    ytProc.on("error", (e) => reject(e));
+  });
+}
+
+// ── Kuyruk mantığı ────────────────────────────────────────────────────────────
 
 async function playNext(guildId: string): Promise<void> {
   const queue = queues.get(guildId);
   if (!queue) return;
 
   if (queue.tracks.length === 0) {
-    // Kuyruk bitti — bağlantıyı kapat
     getVoiceConnection(guildId)?.destroy();
     queues.delete(guildId);
     queue.textChannel
@@ -56,91 +165,55 @@ async function playNext(guildId: string): Promise<void> {
   const track = queue.tracks[0]!;
 
   try {
-    // play-dl ile stream al
-    const streamData = await play.stream(track.url, { quality: 2 });
-    const resource = createAudioResource(streamData.stream, {
-      inputType: streamData.type,
+    const ffmpegStream = await createFfmpegStream(track.url);
+    const resource = createAudioResource(ffmpegStream, {
+      inputType: StreamType.Raw, // ham PCM
     });
     queue.player.play(resource);
     logger.info({ title: track.title, guildId }, "Müzik çalınıyor");
   } catch (err) {
     logger.error({ err, title: track.title }, "Şarkı oynatılamadı, atlanıyor");
-
-    // Hatayı kanala bildir
     queue.textChannel
       .send(`❌ **${track.title}** oynatılamadı, atlanıyor...`)
       .catch(() => null);
-
     queue.tracks.shift();
-    // Kısa bekleme sonrası bir sonrakini dene
-    setTimeout(() => playNext(guildId).catch(() => null), 500);
+    setTimeout(() => playNext(guildId).catch(() => null), 800);
   }
 }
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 export async function addToQueue(
   guildId: string,
   voiceChannel: VoiceBasedChannel,
   textChannel: TextBasedChannel,
   query: string,
-  requestedBy: string,
+  requestedBy: string
 ): Promise<{ track: Track | null; position: number; error?: string }> {
-  // ── 1. Şarkı bilgisini al ────────────────────────────────────────────────
+  // 1. Şarkı bilgisini yt-dlp'den al
   let trackInfo: Track;
-
   try {
-    const ytType = play.yt_validate(query);
-
-    if (ytType === "video") {
-      const info = await play.video_info(query);
-      const v = info.video_details;
-      trackInfo = {
-        title: v.title ?? "Bilinmeyen",
-        url: v.url,
-        duration: formatDuration(v.durationInSec ?? 0),
-        thumbnail: v.thumbnails?.[0]?.url ?? "",
-        requestedBy,
-      };
-    } else if (ytType === "playlist") {
-      // Playlist verilmişse ilk videoyu al
-      const playlist = await play.playlist_info(query, { incomplete: true });
-      const videos = await playlist.all_videos();
-      if (!videos.length) return { track: null, position: 0, error: "Oynatma listesi boş." };
-      const v = videos[0]!;
-      trackInfo = {
-        title: v.title ?? "Bilinmeyen",
-        url: v.url,
-        duration: formatDuration(v.durationInSec ?? 0),
-        thumbnail: v.thumbnails?.[0]?.url ?? "",
-        requestedBy,
-      };
-    } else {
-      // Arama
-      const results = await play.search(query, { limit: 1, source: { youtube: "video" } });
-      if (!results.length)
-        return { track: null, position: 0, error: "Sonuç bulunamadı. Farklı arama dene." };
-      const v = results[0]!;
-      trackInfo = {
-        title: v.title ?? "Bilinmeyen",
-        url: v.url,
-        duration: formatDuration(v.durationInSec ?? 0),
-        thumbnail: v.thumbnails?.[0]?.url ?? "",
-        requestedBy,
-      };
-    }
-  } catch (err) {
-    logger.error({ err }, "Müzik arama hatası");
+    const info = await fetchInfo(query);
+    trackInfo = {
+      title: info.title ?? "Bilinmeyen",
+      url: info.webpage_url,
+      duration: formatDuration(info.duration ?? 0),
+      thumbnail: info.thumbnail ?? "",
+      requestedBy,
+    };
+  } catch (err: any) {
+    logger.error({ err }, "Şarkı bilgisi alınamadı");
     return {
       track: null,
       position: 0,
-      error: "Müzik aranırken hata oluştu. YouTube URL veya arama başlığı gir.",
+      error: `Şarkı bulunamadı: ${err?.message ?? "Bilinmeyen hata"}`,
     };
   }
 
-  // ── 2. Varolan kuyruğa ekle ya da yeni oturum başlat ────────────────────
+  // 2. Varolan kuyruğa ekle veya yeni oturum aç
   let queue = queues.get(guildId);
 
   if (!queue) {
-    // Ses kanalına bağlan
     const connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId,
@@ -149,16 +222,19 @@ export async function addToQueue(
       selfMute: false,
     });
 
-    // Bağlantı Ready olana kadar bekle (30 sn timeout)
+    // Ready olana kadar bekle
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
     } catch (err) {
       logger.error({ err }, "Ses kanalı bağlantısı kurulamadı");
       connection.destroy();
-      return { track: null, position: 0, error: "Ses kanalına bağlanılamadı. Bot'un kanal izinlerini kontrol et." };
+      return {
+        track: null,
+        position: 0,
+        error: "Ses kanalına bağlanılamadı. Bot'un kanal izinlerini kontrol et.",
+      };
     }
 
-    // Player oluştur — abone olmayan varsa duraklat
     const player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Pause },
     });
@@ -170,9 +246,11 @@ export async function addToQueue(
     // Şarkı bitince bir sonrakine geç
     player.on(AudioPlayerStatus.Idle, () => {
       const q = queues.get(guildId);
-      if (!q || q.paused) return; // Duraklatıldıysa tetiklenme
+      if (!q || q.paused) return;
       q.tracks.shift();
-      playNext(guildId).catch((err) => logger.error({ err }, "playNext hatası"));
+      playNext(guildId).catch((e) =>
+        logger.error({ e }, "playNext hatası")
+      );
     });
 
     player.on("error", (err) => {
@@ -183,50 +261,55 @@ export async function addToQueue(
           .send(`❌ Oynatıcı hatası: ${err.message}`)
           .catch(() => null);
         q.tracks.shift();
-        setTimeout(() => playNext(guildId).catch(() => null), 500);
+        setTimeout(() => playNext(guildId).catch(() => null), 800);
       }
     });
 
     // Bağlantı kopunca yeniden bağlanmayı dene
-    connection.on(VoiceConnectionStatus.Disconnected, async (_old, newState) => {
-      // 4014 = Moved/kicked
-      if (
-        newState.reason === VoiceConnectionDisconnectReason.WebSocketClose &&
-        newState.closeCode === 4014
-      ) {
-        try {
-          await entersState(connection, VoiceConnectionStatus.Connecting, 5_000);
-        } catch {
+    connection.on(
+      VoiceConnectionStatus.Disconnected,
+      async (_old, newState) => {
+        if (
+          newState.reason ===
+            VoiceConnectionDisconnectReason.WebSocketClose &&
+          newState.closeCode === 4014
+        ) {
+          // Kicked/moved
+          try {
+            await entersState(
+              connection,
+              VoiceConnectionStatus.Connecting,
+              5_000
+            );
+          } catch {
+            connection.destroy();
+            queues.delete(guildId);
+          }
+          return;
+        }
+        // Geçici kopukluk
+        if (connection.rejoinAttempts < 5) {
+          await new Promise<void>((res) =>
+            setTimeout(res, (connection.rejoinAttempts + 1) * 5_000)
+          );
+          connection.rejoin();
+        } else {
           connection.destroy();
           queues.delete(guildId);
         }
-        return;
       }
-
-      // Geçici kopukluk — yeniden bağlanmayı dene
-      if (connection.rejoinAttempts < 5) {
-        await new Promise<void>((res) =>
-          setTimeout(res, (connection.rejoinAttempts + 1) * 5_000)
-        );
-        connection.rejoin();
-      } else {
-        connection.destroy();
-        queues.delete(guildId);
-      }
-    });
+    );
 
     connection.on(VoiceConnectionStatus.Destroyed, () => {
       queues.delete(guildId);
     });
   } else {
-    // Varolan oturumda text kanalını güncelle
     queue.textChannel = textChannel;
   }
 
   queue.tracks.push(trackInfo);
   const position = queue.tracks.length;
 
-  // İlk şarkıysa hemen çal
   if (position === 1) {
     await playNext(guildId);
   }
@@ -234,7 +317,9 @@ export async function addToQueue(
   return { track: trackInfo, position };
 }
 
-export function pauseResume(guildId: string): "paused" | "resumed" | "not_playing" {
+export function pauseResume(
+  guildId: string
+): "paused" | "resumed" | "not_playing" {
   const queue = queues.get(guildId);
   if (!queue || queue.tracks.length === 0) return "not_playing";
   if (queue.paused) {
@@ -251,7 +336,7 @@ export function skipTrack(guildId: string): Track | null {
   const queue = queues.get(guildId);
   if (!queue || queue.tracks.length === 0) return null;
   const skipped = queue.tracks[0]!;
-  queue.player.stop(true); // Idle event tetiklenir → playNext çağrılır
+  queue.player.stop(true);
   return skipped;
 }
 
@@ -278,5 +363,8 @@ export function getNowPlaying(guildId: string): Track | null {
 }
 
 export function isPlaying(guildId: string): boolean {
-  return queues.has(guildId) && (queues.get(guildId)?.tracks.length ?? 0) > 0;
+  return (
+    queues.has(guildId) &&
+    (queues.get(guildId)?.tracks.length ?? 0) > 0
+  );
 }
