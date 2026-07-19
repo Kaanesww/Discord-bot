@@ -16,7 +16,7 @@ import { logger } from "../lib/logger";
 
 export interface Track {
   title: string;
-  url: string;
+  url: string;          // YouTube video URL (https://www.youtube.com/watch?v=...)
   duration: string;
   thumbnail: string;
   requestedBy: string;
@@ -31,12 +31,35 @@ interface GuildQueue {
 
 const queues = new Map<string, GuildQueue>();
 
-// ── yt-dlp yardımcıları ───────────────────────────────────────────────────────
+// ── Piped API ────────────────────────────────────────────────────────────────
+// Birden fazla Piped instance — biri çalışmazsa diğerini dene
 
-function ytdlpBin(): string {
-  // Nix ile kurulan yt-dlp
-  return "yt-dlp";
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://api.piped.yt",
+  "https://pipedapi.drgns.space",
+  "https://piped-api.garudalinux.org",
+];
+
+async function pipedFetch(path: string): Promise<any> {
+  let lastErr: unknown;
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      lastErr = e;
+      logger.warn({ instance: base, err: e }, "Piped instance başarısız, sonraki deneniyor");
+    }
+  }
+  throw new Error(`Tüm Piped instance'ları başarısız: ${String(lastErr)}`);
 }
+
+// ── Yardımcılar ──────────────────────────────────────────────────────────────
 
 function formatDuration(sec: number): string {
   if (!sec || sec < 0) return "?:??";
@@ -48,106 +71,97 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-interface YtInfo {
+function extractVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname === "youtu.be") return u.pathname.slice(1);
+    return u.searchParams.get("v");
+  } catch {
+    return null;
+  }
+}
+
+// ── Şarkı bilgisi ─────────────────────────────────────────────────────────────
+
+interface SongInfo {
   title: string;
-  webpage_url: string;
-  duration: number;
+  videoUrl: string;   // https://www.youtube.com/watch?v=ID
+  videoId: string;
+  duration: number;   // saniye
   thumbnail: string;
 }
 
-/** yt-dlp ile video bilgisi al (URL veya arama sorgusu) */
-function fetchInfo(query: string): Promise<YtInfo> {
-  return new Promise((resolve, reject) => {
-    // YouTube URL mi yoksa arama sorgusu mu?
-    const isUrl =
-      query.startsWith("http://") || query.startsWith("https://");
-    const target = isUrl ? query : `ytsearch1:${query}`;
+async function fetchSongInfo(query: string): Promise<SongInfo> {
+  const isUrl = query.startsWith("http://") || query.startsWith("https://");
 
-    const proc = spawn(ytdlpBin(), [
-      "--dump-json",
-      "--no-playlist",
-      "--quiet",
-      "--no-warnings",
-      "-f", "bestaudio",
-      "--extractor-args", "youtube:player_client=tv_embedded,android",
-      target,
-    ]);
+  if (isUrl) {
+    const videoId = extractVideoId(query);
+    if (!videoId) throw new Error("Geçersiz YouTube URL'si");
+    const data = await pipedFetch(`/streams/${videoId}`);
+    return {
+      title: data.title ?? "Bilinmeyen",
+      videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      videoId,
+      duration: data.duration ?? 0,
+      thumbnail: data.thumbnailUrl ?? "",
+    };
+  }
 
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
-    proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+  // Arama
+  const data = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=videos`);
+  const items: any[] = data.items ?? [];
+  const first = items.find((i) => i.type === "stream" || i.url?.startsWith("/watch"));
+  if (!first) throw new Error("Sonuç bulunamadı");
 
-    proc.on("close", (code) => {
-      if (code !== 0) {
-        return reject(new Error(`yt-dlp hata (${code}): ${stderr.trim()}`));
-      }
-      try {
-        // Birden fazla JSON satırı varsa ilkini al
-        const line = stdout.trim().split("\n")[0]!;
-        const data = JSON.parse(line) as YtInfo;
-        resolve(data);
-      } catch (e) {
-        reject(new Error("yt-dlp JSON parse hatası"));
-      }
-    });
-
-    proc.on("error", (e) => reject(e));
-  });
+  const videoId = (first.url as string).replace("/watch?v=", "");
+  return {
+    title: first.title ?? "Bilinmeyen",
+    videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    videoId,
+    duration: first.duration ?? 0,
+    thumbnail: first.thumbnail ?? "",
+  };
 }
 
-/** yt-dlp ile ses stream URL'si al, ffmpeg ile Opus'a çevir */
-function createFfmpegStream(videoUrl: string): Promise<NodeJS.ReadableStream> {
-  return new Promise((resolve, reject) => {
-    // Önce yt-dlp'den stream URL'sini al
-    const ytProc = spawn(ytdlpBin(), [
-      "-f", "bestaudio",
-      "--get-url",
-      "--no-playlist",
-      "--quiet",
-      "--no-warnings",
-      "--extractor-args", "youtube:player_client=tv_embedded,android",
-      videoUrl,
-    ]);
+// ── Ses stream ────────────────────────────────────────────────────────────────
 
-    let streamUrl = "";
-    let ytErr = "";
-    ytProc.stdout.on("data", (d: Buffer) => (streamUrl += d.toString()));
-    ytProc.stderr.on("data", (d: Buffer) => (ytErr += d.toString()));
+/**
+ * Piped API'den en iyi ses URL'sini al, ffmpeg ile Discord'a uygun
+ * ham PCM (s16le, 48kHz, stereo) stream'e çevir.
+ */
+async function createAudioStream(videoId: string): Promise<NodeJS.ReadableStream> {
+  const data = await pipedFetch(`/streams/${videoId}`);
 
-    ytProc.on("close", (code) => {
-      const url = streamUrl.trim().split("\n")[0]!;
-      if (code !== 0 || !url) {
-        return reject(
-          new Error(`Stream URL alınamadı (${code}): ${ytErr.trim()}`)
-        );
-      }
+  // En yüksek bitrate'li ses akışını seç
+  const audioStreams: any[] = data.audioStreams ?? [];
+  if (audioStreams.length === 0) throw new Error("Ses akışı bulunamadı");
 
-      // ffmpeg ile URL'yi ham PCM'e çevir
-      const ff = spawn("ffmpeg", [
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-i", url,
-        "-f", "s16le",   // ham 16-bit little-endian PCM
-        "-ar", "48000",  // Discord 48kHz
-        "-ac", "2",      // stereo
-        "-loglevel", "quiet",
-        "pipe:1",
-      ]);
+  audioStreams.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+  const best = audioStreams[0]!;
+  const streamUrl: string = best.url;
 
-      ff.on("error", (e) => reject(e));
-      ff.stderr.on("data", () => null); // loglamayı bastır
+  logger.info({ videoId, mimeType: best.mimeType, bitrate: best.bitrate }, "Ses URL'si alındı");
 
-      // ffmpeg stdout'u sağla
-      resolve(ff.stdout as unknown as NodeJS.ReadableStream);
-    });
+  // ffmpeg ile PCM'e çevir
+  const ff = spawn("ffmpeg", [
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_delay_max", "5",
+    "-i", streamUrl,
+    "-f", "s16le",    // ham 16-bit little-endian PCM
+    "-ar", "48000",   // Discord 48kHz
+    "-ac", "2",       // stereo
+    "-loglevel", "quiet",
+    "pipe:1",
+  ]);
 
-    ytProc.on("error", (e) => reject(e));
-  });
+  ff.on("error", (e) => logger.error({ e }, "ffmpeg başlatılamadı"));
+  ff.stderr.on("data", () => null);
+
+  return ff.stdout as unknown as NodeJS.ReadableStream;
 }
 
-// ── Kuyruk mantığı ────────────────────────────────────────────────────────────
+// ── Kuyruk oynatma ────────────────────────────────────────────────────────────
 
 async function playNext(guildId: string): Promise<void> {
   const queue = queues.get(guildId);
@@ -163,10 +177,18 @@ async function playNext(guildId: string): Promise<void> {
   }
 
   const track = queue.tracks[0]!;
+  const videoId = extractVideoId(track.url);
+
+  if (!videoId) {
+    queue.textChannel.send(`❌ Geçersiz URL: ${track.title}`).catch(() => null);
+    queue.tracks.shift();
+    setTimeout(() => playNext(guildId).catch(() => null), 800);
+    return;
+  }
 
   try {
-    const ffmpegStream = await createFfmpegStream(track.url);
-    const resource = createAudioResource(ffmpegStream, {
+    const stream = await createAudioStream(videoId);
+    const resource = createAudioResource(stream, {
       inputType: StreamType.Raw, // ham PCM
     });
     queue.player.play(resource);
@@ -190,15 +212,15 @@ export async function addToQueue(
   query: string,
   requestedBy: string
 ): Promise<{ track: Track | null; position: number; error?: string }> {
-  // 1. Şarkı bilgisini yt-dlp'den al
+  // 1. Şarkı bilgisini Piped API'den al
   let trackInfo: Track;
   try {
-    const info = await fetchInfo(query);
+    const info = await fetchSongInfo(query);
     trackInfo = {
-      title: info.title ?? "Bilinmeyen",
-      url: info.webpage_url,
-      duration: formatDuration(info.duration ?? 0),
-      thumbnail: info.thumbnail ?? "",
+      title: info.title,
+      url: info.videoUrl,
+      duration: formatDuration(info.duration),
+      thumbnail: info.thumbnail,
       requestedBy,
     };
   } catch (err: any) {
@@ -222,7 +244,6 @@ export async function addToQueue(
       selfMute: false,
     });
 
-    // Ready olana kadar bekle
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
     } catch (err) {
@@ -243,14 +264,11 @@ export async function addToQueue(
     queue = { tracks: [], player, paused: false, textChannel };
     queues.set(guildId, queue);
 
-    // Şarkı bitince bir sonrakine geç
     player.on(AudioPlayerStatus.Idle, () => {
       const q = queues.get(guildId);
       if (!q || q.paused) return;
       q.tracks.shift();
-      playNext(guildId).catch((e) =>
-        logger.error({ e }, "playNext hatası")
-      );
+      playNext(guildId).catch((e) => logger.error({ e }, "playNext hatası"));
     });
 
     player.on("error", (err) => {
@@ -265,29 +283,21 @@ export async function addToQueue(
       }
     });
 
-    // Bağlantı kopunca yeniden bağlanmayı dene
     connection.on(
       VoiceConnectionStatus.Disconnected,
       async (_old, newState) => {
         if (
-          newState.reason ===
-            VoiceConnectionDisconnectReason.WebSocketClose &&
+          newState.reason === VoiceConnectionDisconnectReason.WebSocketClose &&
           newState.closeCode === 4014
         ) {
-          // Kicked/moved
           try {
-            await entersState(
-              connection,
-              VoiceConnectionStatus.Connecting,
-              5_000
-            );
+            await entersState(connection, VoiceConnectionStatus.Connecting, 5_000);
           } catch {
             connection.destroy();
             queues.delete(guildId);
           }
           return;
         }
-        // Geçici kopukluk
         if (connection.rejoinAttempts < 5) {
           await new Promise<void>((res) =>
             setTimeout(res, (connection.rejoinAttempts + 1) * 5_000)
