@@ -1,4 +1,22 @@
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
+import { existsSync } from "node:fs";
+
+// Sistem fontu kaydet — dikdörtgen glyph sorununu çözer
+const FONT_PATHS: { path: string; bold?: string }[] = [
+  {
+    path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    bold: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+  },
+];
+let FONT_FAMILY = "sans-serif";
+for (const f of FONT_PATHS) {
+  if (existsSync(f.path)) {
+    GlobalFonts.registerFromPath(f.path);
+    if (f.bold && existsSync(f.bold)) GlobalFonts.registerFromPath(f.bold);
+    FONT_FAMILY = "DejaVu Sans";
+    break;
+  }
+}
 
 // ── Yardım kartı kategorileri ──────────────────────────────────────────────────
 
@@ -46,8 +64,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     key: "ekonomi", label: "Ekonomi", icon: "💰",
     color: "#ffd700", gradient: ["#ffd70033", "#ffd70011"],
     commands: [
-      { name: "gunlukodul",              desc: "Günlük ödül al (20sa bekleme)" },
-      { name: "bakiye [@kişi]",          desc: "Coin bakiyesini gösterir" },
+      { name: "daily",                    desc: "Claim daily vivincy reward" },
+      { name: "balance [@kişi]",         desc: "Check vivincy balance" },
       { name: "transfer @kişi <miktar>", desc: "Coin gönderir" },
       { name: "kumar <bahis>",           desc: "🎰 Slot makinesi (min 10)" },
       { name: "rulet <seçim> <bahis>",   desc: "Rulet: kırmızı/siyah/0-36" },
@@ -148,12 +166,12 @@ function drawHeader(ctx: any, W: number, title: string, sub: string, HEADER_H: n
   tg.addColorStop(0.5, "#ffffff");
   tg.addColorStop(1, "#eb459e");
   ctx.fillStyle = tg;
-  ctx.font = "bold 32px sans-serif";
+  ctx.font = `bold 32px '${FONT_FAMILY}'`;
   ctx.textAlign = "center";
   ctx.fillText(title, W / 2, 50);
 
   ctx.fillStyle = "#72767d";
-  ctx.font = "13px sans-serif";
+  ctx.font = `13px '${FONT_FAMILY}'`;
   ctx.fillText(sub, W / 2, 76);
   ctx.textAlign = "left";
 
@@ -214,7 +232,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
 
     // Icon + label
     ctx.fillStyle = cat.color;
-    ctx.font = "bold 16px sans-serif";
+    ctx.font = `bold 16px '${FONT_FAMILY}'`;
     ctx.textAlign = "left";
     ctx.fillText(`${cat.icon}  ${cat.label}`, x + 16, y + 30);
 
@@ -225,7 +243,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
     ctx.fillStyle = cat.color + "33";
     ctx.fill();
     ctx.fillStyle = cat.color;
-    ctx.font = "11px sans-serif";
+    ctx.font = `11px '${FONT_FAMILY}'`;
     ctx.textAlign = "right";
     ctx.fillText(badge, x + CAT_W - 20, y + 27);
     ctx.textAlign = "left";
@@ -240,13 +258,13 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
         ctx.fill();
       }
       ctx.fillStyle = "#c8ceff";
-      ctx.font = "bold 11px sans-serif";
+      ctx.font = `bold 11px '${FONT_FAMILY}'`;
       const nameStr = `${prefix}${cmd.name}`;
       const maxName = nameStr.length > 28 ? nameStr.slice(0, 27) + "…" : nameStr;
       ctx.fillText(maxName, x + 16, cy + 12);
 
       ctx.fillStyle = "#72767d";
-      ctx.font = "10px sans-serif";
+      ctx.font = `10px '${FONT_FAMILY}'`;
       ctx.textAlign = "right";
       const descStr = cmd.desc.length > 30 ? cmd.desc.slice(0, 29) + "…" : cmd.desc;
       ctx.fillText(descStr, x + CAT_W - 10, cy + 12);
@@ -255,7 +273,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
 
     if (cat.commands.length > 4) {
       ctx.fillStyle = cat.color + "aa";
-      ctx.font = "10px sans-serif";
+      ctx.font = `10px '${FONT_FAMILY}'`;
       ctx.textAlign = "right";
       ctx.fillText(`+${cat.commands.length - 4} daha → ${prefix}yardim ${cat.key}`, x + CAT_W - 10, y + CAT_H - 10);
       ctx.textAlign = "left";
@@ -272,7 +290,7 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
   ctx.stroke();
 
   ctx.fillStyle = "#72767d";
-  ctx.font = "12px sans-serif";
+  ctx.font = `12px '${FONT_FAMILY}'`;
   ctx.textAlign = "center";
   ctx.fillText("💡 Bakiye tüm sunucularda ortaktır  •  Ses kanalında dakikada XP  •  Seviye atladıkça kart teması değişir  •  🍀 pray ile şansını artır!", W / 2, fy + 22);
   ctx.fillText(`VBRI Bot  •  ${prefix}yardim <moderasyon|seviye|ekonomi|oyunlar|muzik|yonetim>`, W / 2, fy + 38);
@@ -338,13 +356,13 @@ export async function generateCategoryHelpCard(prefix: string, catKey: string): 
   ctx.fill();
 
   ctx.fillStyle = cat.color;
-  ctx.font = "bold 18px sans-serif";
+  ctx.font = `bold 18px '${FONT_FAMILY}'`;
   ctx.textAlign = "left";
   ctx.fillText(`${cat.icon}  ${cat.label}`, cx + 18, cy + 34);
 
   // Komut sayısı
   ctx.fillStyle = cat.color + "cc";
-  ctx.font = "13px sans-serif";
+  ctx.font = `13px '${FONT_FAMILY}'`;
   ctx.textAlign = "right";
   ctx.fillText(`${cat.commands.length} komut`, cx + CW - 16, cy + 34);
   ctx.textAlign = "left";
@@ -361,18 +379,18 @@ export async function generateCategoryHelpCard(prefix: string, catKey: string): 
 
     // Command name
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 13px sans-serif";
+    ctx.font = `bold 13px '${FONT_FAMILY}'`;
     ctx.fillText(`${prefix}${cmd.name}`, cx + 18, ry + 14);
 
     // Arrow
     ctx.fillStyle = cat.color + "88";
-    ctx.font = "11px sans-serif";
+    ctx.font = `11px '${FONT_FAMILY}'`;
     const nameW = ctx.measureText(`${prefix}${cmd.name}`).width;
     ctx.fillText("→", cx + 22 + nameW, ry + 14);
 
     // Description
     ctx.fillStyle = "#a3a6b4";
-    ctx.font = "12px sans-serif";
+    ctx.font = `12px '${FONT_FAMILY}'`;
     ctx.textAlign = "right";
     ctx.fillText(cmd.desc, cx + CW - 14, ry + 14);
     ctx.textAlign = "left";
@@ -388,7 +406,7 @@ export async function generateCategoryHelpCard(prefix: string, catKey: string): 
   ctx.stroke();
 
   ctx.fillStyle = "#72767d";
-  ctx.font = "12px sans-serif";
+  ctx.font = `12px '${FONT_FAMILY}'`;
   ctx.textAlign = "center";
   const allKeys = HELP_CATEGORIES.map(c => c.key).join(" | ");
   ctx.fillText(`${prefix}yardim <${allKeys}>`, W / 2, fy + 18);

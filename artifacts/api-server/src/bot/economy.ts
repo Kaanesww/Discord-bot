@@ -30,14 +30,26 @@ export async function takeCoins(userId: string, amount: number): Promise<number>
   return setCoins(userId, bal.coins - amount);
 }
 
-export async function claimDaily(userId: string): Promise<{ reward: number; streak: number; alreadyClaimed: boolean }> {
+export interface DailyResult {
+  reward: number;
+  streak: number;
+  alreadyClaimed: boolean;
+  remainingMs?: number;   // alreadyClaimed=true olduğunda ms cinsinden kalan süre
+  lootbox: boolean;
+  lootboxAmount: number;
+}
+
+export async function claimDaily(userId: string): Promise<DailyResult> {
   const bal = await getBalance(userId);
   const now = new Date();
   const last = bal.lastDaily;
 
   if (last) {
-    const hours = (now.getTime() - last.getTime()) / (1000 * 60 * 60);
-    if (hours < 20) return { reward: 0, streak: bal.streak, alreadyClaimed: true };
+    const elapsed = now.getTime() - last.getTime();
+    const cooldown = 20 * 60 * 60 * 1000; // 20 saat
+    if (elapsed < cooldown) {
+      return { reward: 0, streak: bal.streak, alreadyClaimed: true, remainingMs: cooldown - elapsed, lootbox: false, lootboxAmount: 0 };
+    }
   }
 
   const wasYesterday = last && (now.getTime() - last.getTime()) < 1000 * 60 * 60 * 36;
@@ -46,15 +58,22 @@ export async function claimDaily(userId: string): Promise<{ reward: number; stre
   const bonus = Math.min(newStreak - 1, 30) * 50;
   const reward = base + bonus;
 
+  // Lootbox: belirli seri günlerinde veya %8 şansla
+  const LOOTBOX_MILESTONES = new Set([7, 14, 21, 30, 60, 100]);
+  const lootbox = LOOTBOX_MILESTONES.has(newStreak) || Math.random() < 0.08;
+  const lootboxAmount = lootbox ? Math.floor(Math.random() * 800) + 200 : 0; // 200-999
+
+  const totalCoins = bal.coins + reward + lootboxAmount;
+
   await db
     .insert(economyTable)
-    .values({ userId, coins: bal.coins + reward, lastDaily: now, streak: newStreak })
+    .values({ userId, coins: totalCoins, lastDaily: now, streak: newStreak })
     .onConflictDoUpdate({
       target: economyTable.userId,
-      set: { coins: bal.coins + reward, lastDaily: now, streak: newStreak },
+      set: { coins: totalCoins, lastDaily: now, streak: newStreak },
     });
 
-  return { reward, streak: newStreak, alreadyClaimed: false };
+  return { reward, streak: newStreak, alreadyClaimed: false, lootbox, lootboxAmount };
 }
 
 /**
