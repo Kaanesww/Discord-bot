@@ -16,7 +16,12 @@ import { generateLevelUpCard } from "./levelUpCard";
 import { generateSicilCard } from "./sicilCard";
 import { generateHelpCard, generateCategoryHelpCard, HELP_CATEGORIES } from "./helpCard";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
-import { getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll } from "./economy";
+import {
+  getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll,
+  addEconXp, getEconRank, getEconLeaderboard,
+  econLevelFromXp, xpAtLevel, xpForNextLevel, econLevelReward, econRankTitle,
+  type EconXpResult,
+} from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying } from "./music";
 import { isOwner } from "./ownerUtils";
 
@@ -303,6 +308,19 @@ async function pfxAc(m: Message): Promise<void> {
   await m.reply("🔓 Kanal kilidi açıldı.");
 }
 
+// ── Ekonomi seviye-atlama bildirimi ───────────────────────────────────────────
+async function notifyEconLevelUp(m: Message, result: EconXpResult): Promise<void> {
+  if (!result.leveled) return;
+  const highest = result.newLevels[result.newLevels.length - 1]!;
+  const title = econRankTitle(highest);
+  const nextReward = econLevelReward(highest + 1);
+  await m.channel.send(
+    `🎉 **${m.author.displayName}** reached **Economy Level ${highest}** — ${title}!\n` +
+    `${COIN} **+${result.totalReward.toLocaleString("en-US")} vivincy** level reward added!\n` +
+    `\u200b *Next level reward: ${COIN} ${nextReward.toLocaleString("en-US")} vivincy*`
+  ).catch(() => null);
+}
+
 // EKONOMİ
 async function pfxBakiye(m: Message): Promise<void> {
   const target = m.mentions.users.first() ?? m.author;
@@ -345,6 +363,8 @@ async function pfxGunlukodul(m: Message): Promise<void> {
   msg += `**⏱️ |** Your next daily is in: **${formatTime(20 * 60 * 60 * 1000)}**`;
 
   await m.reply(msg);
+  const xpR = await addEconXp(m.author.id, 100).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxTransfer(m: Message, args: string[]): Promise<void> {
@@ -357,6 +377,8 @@ async function pfxTransfer(m: Message, args: string[]): Promise<void> {
   await takeCoins(m.author.id, amount);
   const newTarget = await addCoins(target.id, amount);
   await m.reply(`💸 **${m.author.displayName}** → **${target.displayName}** | **${COIN} ${amount.toLocaleString("en-US")} vivincy** gönderildi!\n${target.displayName} yeni bakiye: **${COIN} ${newTarget.toLocaleString("en-US")} vivincy**`);
+  const xpR = await addEconXp(m.author.id, 10).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxKumar(m: Message, args: string[]): Promise<void> {
@@ -423,6 +445,8 @@ async function pfxKumar(m: Message, args: string[]): Promise<void> {
     : `${label} **${COIN} -${bet.toLocaleString("en-US")} vivincy** | Total: ${newBal.toLocaleString("en-US")}`;
 
   await msg.edit(frame(s1, s2, s3, resultLine)).catch(() => null);
+  const xpR = await addEconXp(m.author.id, multiplier > 0 ? 20 : 8).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxRulet(m: Message, args: string[]): Promise<void> {
@@ -472,6 +496,8 @@ async function pfxRulet(m: Message, args: string[]): Promise<void> {
     `Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy** | ${win ? "Kazanç" : "Kayıp"}: **${COIN} ${diffText} vivincy** | Çarpan: x${multiplier}\n` +
     `Yeni bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`
   );
+  const xpR = await addEconXp(m.author.id, win ? 15 : 5).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxCoinflip(m: Message, args: string[]): Promise<void> {
@@ -497,6 +523,8 @@ async function pfxCoinflip(m: Message, args: string[]): Promise<void> {
     const newBal = await takeCoins(m.author.id, bet);
     await m.reply(`${result}\n💸 **Kaybettin! ${COIN} -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
   }
+  const xpR = await addEconXp(m.author.id, win ? 15 : 5).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
@@ -518,6 +546,8 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   if (handValue(playerHand) === 21) {
     const newBal = await addCoins(m.author.id, Math.round(bet * 1.5));
     await m.reply(`${showHands(false)}\n\n🃏 **BLACKJACK! ${COIN} +${Math.round(bet * 1.5).toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
+    const xpR = await addEconXp(m.author.id, 25).catch(() => null);
+    if (xpR) await notifyEconLevelUp(m, xpR);
     return;
   }
 
@@ -538,6 +568,8 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
     if (handValue(playerHand) > 21) {
       const newBal = await takeCoins(m.author.id, bet);
       await msg.edit(`${showHands(false)}\n\n💥 **Battın! ${COIN} -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
+      const xpR = await addEconXp(m.author.id, 8).catch(() => null);
+      if (xpR) await notifyEconLevelUp(m, xpR);
       return;
     }
   }
@@ -555,6 +587,9 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   else { newBal = await takeCoins(m.author.id, bet); result = `💸 Kaybettin! ${COIN} -${bet.toLocaleString("en-US")} vivincy`; }
 
   await msg.edit(`${showHands(false)}\n\n**${result}** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
+  const bjWon = pv <= 21 && (dv > 21 || luckSave || pv > dv);
+  const xpR = await addEconXp(m.author.id, bjWon ? 20 : 8).catch(() => null);
+  if (xpR) await notifyEconLevelUp(m, xpR);
 }
 
 async function pfxDuel(m: Message, args: string[]): Promise<void> {
@@ -595,6 +630,20 @@ async function pfxDuel(m: Message, args: string[]): Promise<void> {
     `🏆 **${winner.displayName}** kazandı! **${COIN} +${bet.toLocaleString("en-US")} vivincy**${(winA ? luckA : luckB) > 0 ? " 🍀" : ""}\n` +
     `Kazanan yeni bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`
   );
+  const [wXp, lXp] = await Promise.all([
+    addEconXp(winner.id, 25).catch(() => null),
+    addEconXp(loser.id, 10).catch(() => null),
+  ]);
+  // Notify level-ups: m.author = challenger, use their channel
+  for (const [xpR, user] of [[wXp, winner], [lXp, loser]] as const) {
+    if (xpR?.leveled) {
+      const highest = xpR.newLevels[xpR.newLevels.length - 1]!;
+      await m.channel.send(
+        `🎉 **${(user as typeof winner).displayName}** reached **Economy Level ${highest}** — ${econRankTitle(highest)}!\n` +
+        `${COIN} **+${xpR.totalReward.toLocaleString("en-US")} vivincy** reward added!`
+      ).catch(() => null);
+    }
+  }
 }
 
 async function pfxPray(m: Message): Promise<void> {
@@ -669,6 +718,75 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
   }
 
   await msg.edit(`🎮 **TKM Sonucu**\n${m.author.displayName}: ${choices[cA]!} | ${target.displayName}: ${choices[cB]!}\n\n${result}`);
+
+  // XP for both players
+  const draw = !aWins && !bWins;
+  const [xpA, xpB] = await Promise.all([
+    addEconXp(m.author.id, aWins ? 15 : draw ? 5 : 5).catch(() => null),
+    addEconXp(target.id,   aWins ? 5  : draw ? 5 : 15).catch(() => null),
+  ]);
+  for (const [xpR, user] of [[xpA, m.author], [xpB, target]] as const) {
+    if (xpR?.leveled) {
+      const highest = xpR.newLevels[xpR.newLevels.length - 1]!;
+      await m.channel.send(
+        `🎉 **${(user as typeof m.author).displayName}** reached **Economy Level ${highest}** — ${econRankTitle(highest)}!\n` +
+        `${COIN} **+${xpR.totalReward.toLocaleString("en-US")} vivincy** reward added!`
+      ).catch(() => null);
+    }
+  }
+}
+
+// EKONOMİ SEVİYE PROFİLİ
+async function pfxEkono(m: Message): Promise<void> {
+  const target = m.mentions.users.first() ?? m.author;
+  const bal = await getBalance(target.id);
+  const xp = (bal as any).econXp as number ?? 0;
+  const level = (bal as any).econLevel as number ?? 0;
+  const luck = await getLuck(target.id);
+  const rank = await getEconRank(target.id);
+
+  const xpStart = xpAtLevel(level);
+  const xpNeeded = xpForNextLevel(level);
+  const xpProgress = xp - xpStart;
+  const pct = Math.min(100, Math.floor((xpProgress / xpNeeded) * 100));
+  const barLen = 20;
+  const filled = Math.round((pct / 100) * barLen);
+  const bar = "█".repeat(filled) + "░".repeat(barLen - filled);
+  const title = econRankTitle(level);
+  const nextReward = econLevelReward(level + 1);
+  const luckLine = luck > 0 ? "\n🍀 **|** Luck is currently **active**!" : "";
+
+  await m.reply(
+    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
+    `🏦 **${target.displayName}** · Economy Profile\n` +
+    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
+    `⭐ **Level ${level}** — ${title}\n` +
+    `📊 XP: **${xpProgress.toLocaleString("en-US")} / ${xpNeeded.toLocaleString("en-US")}** *(${pct}%)*\n` +
+    `\`[${bar}]\`\n` +
+    `${COIN} Balance: **${bal.coins.toLocaleString("en-US")} vivincy**\n` +
+    `🔥 Daily streak: **${bal.streak} days**\n` +
+    `🏆 Economy rank: **#${rank}**${luckLine}\n` +
+    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
+    `🎁 Next level reward: **${COIN} ${nextReward.toLocaleString("en-US")} vivincy**`
+  );
+}
+
+async function pfxEkonLider(m: Message): Promise<void> {
+  const top = await getEconLeaderboard(10);
+  if (!top.length) { await m.reply("❌ Henüz ekonomi verisi yok."); return; }
+
+  let msg = `**━━━━━━━━━━━━━━━━━━━━━**\n🏦 **Economy Leaderboard** — Top 10\n**━━━━━━━━━━━━━━━━━━━━━**\n`;
+  for (let i = 0; i < top.length; i++) {
+    const row = top[i]!;
+    const medal = (["🥇", "🥈", "🥉"] as string[])[i] ?? `**${i + 1}.**`;
+    const lvl = (row as any).econLevel as number ?? 0;
+    const rowXp = (row as any).econXp as number ?? 0;
+    const rankTitle = econRankTitle(lvl);
+    let username = `<@${row.userId}>`;
+    try { const u = await m.client.users.fetch(row.userId); username = u.displayName; } catch { /**/ }
+    msg += `${medal} **${username}** — Lv.**${lvl}** ${rankTitle} · ${rowXp.toLocaleString("en-US")} XP\n`;
+  }
+  await m.reply(msg);
 }
 
 async function pfxPatla(m: Message): Promise<void> {
@@ -941,6 +1059,9 @@ const prefixHandlers: Record<string, PfxHandler> = {
   blackjack: pfxBlackjack, bj: pfxBlackjack,
   duel: pfxDuel,
   pray: (m) => pfxPray(m), dua: (m) => pfxPray(m),
+  // Ekonomi Seviye
+  ekono: (m) => pfxEkono(m), ekonomi: (m) => pfxEkono(m), econlevel: (m) => pfxEkono(m), elevel: (m) => pfxEkono(m),
+  ekonlider: (m) => pfxEkonLider(m), elb: (m) => pfxEkonLider(m), econlb: (m) => pfxEkonLider(m),
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
   patla: (m) => pfxPatla(m),

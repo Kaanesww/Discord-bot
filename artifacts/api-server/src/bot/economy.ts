@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { economyTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, gt, desc, sql } from "drizzle-orm";
 
 const PRAY_COOLDOWN_MS = 4 * 60 * 1000;  // 4 dakika
 const LUCK_DURATION_MS  = 2 * 60 * 1000; // 2 dakika
@@ -143,8 +143,127 @@ export async function activatePray(userId: string): Promise<{ ok: boolean; remai
  */
 export function luckRoll(luck: number): number {
   if (luck === 0) return Math.random();
-  // İki deneme yap, büyüğünü al → kazanma eşiğini (0.5) geçme ihtimali artar
   const r1 = Math.random();
   const r2 = Math.random();
   return Math.max(r1, r2);
+}
+
+// ── Ekonomi Seviye Sistemi ─────────────────────────────────────────────────────
+
+/** Seviye N'den N+1'e geçmek için gereken XP */
+export function xpForNextLevel(level: number): number {
+  return (level + 1) * 250;
+}
+
+/** Belirli bir seviyeye ulaşmak için gereken toplam XP */
+export function xpAtLevel(level: number): number {
+  let total = 0;
+  for (let i = 0; i < level; i++) total += xpForNextLevel(i);
+  return total;
+}
+
+/** Toplam XP'den mevcut seviyeyi hesapla */
+export function econLevelFromXp(totalXp: number): number {
+  let level = 0;
+  let accumulated = 0;
+  while (true) {
+    const needed = xpForNextLevel(level);
+    if (totalXp < accumulated + needed) break;
+    accumulated += needed;
+    level++;
+  }
+  return level;
+}
+
+/** Bir seviyeye ulaşınca verilen coin ödülü */
+export function econLevelReward(level: number): number {
+  const base = level * 200;
+  const milestones: Record<number, number> = {
+    5: 1_000, 10: 5_000, 15: 8_000, 20: 15_000,
+    25: 25_000, 30: 40_000, 50: 100_000, 75: 200_000, 100: 500_000,
+  };
+  return base + (milestones[level] ?? 0);
+}
+
+/** Seviye unvanı */
+export function econRankTitle(level: number): string {
+  if (level >= 100) return "🌟 Godlike";
+  if (level >= 75)  return "👑 Mythic";
+  if (level >= 50)  return "💎 Legend";
+  if (level >= 30)  return "🎖️ Master";
+  if (level >= 25)  return "🏅 Expert";
+  if (level >= 20)  return "💫 Elite";
+  if (level >= 15)  return "🛡️ Veteran";
+  if (level >= 10)  return "⚔️ Apprentice";
+  if (level >= 5)   return "🌿 Rookie";
+  return "🌱 Newcomer";
+}
+
+export interface EconXpResult {
+  leveled: boolean;
+  newLevels: number[];    // seviye atlanan tüm seviyelerin listesi
+  totalReward: number;    // kazanılan toplam coin
+  newLevel: number;
+  newXp: number;
+}
+
+/** Kullanıcıya ekonomi XP ekler; seviye atlanırsa ödül verir */
+export async function addEconXp(userId: string, xp: number): Promise<EconXpResult> {
+  const bal = await getBalance(userId);
+  const oldXp = (bal as any).econXp as number ?? 0;
+  const oldLevel = (bal as any).econLevel as number ?? 0;
+  const newXp = oldXp + xp;
+  const newLevel = econLevelFromXp(newXp);
+
+  const newLevels: number[] = [];
+  let totalReward = 0;
+
+  if (newLevel > oldLevel) {
+    for (let l = oldLevel + 1; l <= newLevel; l++) {
+      newLevels.push(l);
+      totalReward += econLevelReward(l);
+    }
+  }
+
+  const newCoins = Math.max(0, bal.coins + totalReward);
+
+  await db
+    .insert(economyTable)
+    .values({
+      userId,
+      coins: newCoins,
+      lastDaily: bal.lastDaily,
+      streak: bal.streak,
+      luck: bal.luck,
+      luckExpiresAt: bal.luckExpiresAt,
+      prayUsedAt: bal.prayUsedAt,
+      econXp: newXp,
+      econLevel: newLevel,
+    })
+    .onConflictDoUpdate({
+      target: economyTable.userId,
+      set: { coins: newCoins, econXp: newXp, econLevel: newLevel },
+    });
+
+  return { leveled: newLevel > oldLevel, newLevels, totalReward, newLevel, newXp };
+}
+
+/** Ekonomi sıralamasında kaçıncı olduğunu döner (1-based) */
+export async function getEconRank(userId: string): Promise<number> {
+  const bal = await getBalance(userId);
+  const myXp = (bal as any).econXp as number ?? 0;
+  const rows = await db
+    .select({ count: sql<string>`count(*)` })
+    .from(economyTable)
+    .where(gt(economyTable.econXp, myXp));
+  return Number(rows[0]?.count ?? 0) + 1;
+}
+
+/** Ekonomi liderlik tablosu */
+export async function getEconLeaderboard(limit = 10) {
+  return db
+    .select()
+    .from(economyTable)
+    .orderBy(desc(economyTable.econXp))
+    .limit(limit);
 }
