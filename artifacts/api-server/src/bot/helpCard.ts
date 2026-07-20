@@ -64,8 +64,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     key: "ekonomi", label: "Ekonomi", icon: "💰",
     color: "#ffd700", gradient: ["#ffd70033", "#ffd70011"],
     commands: [
-      { name: "daily",                    desc: "Claim daily vivincy reward" },
-      { name: "balance [@kişi]",         desc: "Check vivincy balance" },
+      { name: "gunlukodul",               desc: "Günlük vivincy ödülü al" },
+      { name: "bakiye [@kişi]",          desc: "Vivincy bakiyeni gör" },
       { name: "transfer @kişi <miktar>", desc: "Coin gönderir" },
       { name: "kumar <bahis>",           desc: "🎰 Slot makinesi (min 10)" },
       { name: "rulet <seçim> <bahis>",   desc: "Rulet: kırmızı/siyah/0-36" },
