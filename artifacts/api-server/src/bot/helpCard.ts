@@ -111,6 +111,30 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "yardim [kategori]",       desc: "Komut rehberi" },
     ],
   },
+  {
+    key: "guard", label: "Guard", icon: "🛡️",
+    color: "#f04747", gradient: ["#f0474733", "#f0474711"],
+    commands: [
+      { name: "guard",                        desc: "Tüm koruma ayarlarını göster" },
+      { name: "guard spam aç [esik N] [aksiyon]",  desc: "Spam: delete/warn/mute/kick" },
+      { name: "guard link aç [aksiyon]",      desc: "Link engelle: delete/warn/kick" },
+      { name: "guard link whitelist ekle/kaldir <domain>", desc: "İzin verilen domainler" },
+      { name: "guard bot aç [aksiyon]",       desc: "Bot girişini engelle: kick/ban" },
+      { name: "guard emoji aç [max N]",       desc: "Fazla emoji sil (varsayılan 5)" },
+      { name: "guard rol aç",                 desc: "Toplu rol saldırısını tespit et" },
+      { name: "guard kanal aç",               desc: "Toplu kanal saldırısını tespit et" },
+      { name: "guard log #kanal",             desc: "Guard olaylarını bu kanala logla" },
+    ],
+  },
+  {
+    key: "stat", label: "Stat Kanalları", icon: "📊",
+    color: "#00b0f4", gradient: ["#00b0f433", "#00b0f411"],
+    commands: [
+      { name: "stat",                    desc: "İstatistik kanallarını kur" },
+      { name: "stat guncelle",           desc: "Kanalları hemen güncelle" },
+      { name: "stat kaldir",             desc: "Stat kanallarını kaldır" },
+    ],
+  },
 ];
 
 // ── Yardımcı çizim fonksiyonları ──────────────────────────────────────────────

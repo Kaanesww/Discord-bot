@@ -24,6 +24,9 @@ import {
 } from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying, warmupMusic } from "./music";
 import { isOwner } from "./ownerUtils";
+import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
+import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
+import { AuditLogEvent, type GuildMember } from "discord.js";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
 let COIN = "🪙"; // fallback, uygulama emojisi yüklenince güncellenir
@@ -1070,6 +1073,154 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
   }
 }
 
+// ── GUARD ─────────────────────────────────────────────────────────────────────
+
+const GUARD_MODULES = ["spam", "link", "bot", "emoji", "rol", "kanal"] as const;
+type GuardModule = typeof GUARD_MODULES[number];
+
+async function pfxGuard(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member || !m.guildId) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
+    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var."); return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+
+  // v!guard → mevcut durumu göster
+  if (!sub || sub === "durum" || sub === "status") {
+    const cfg = await getGuard(m.guildId);
+    const row = (k: string, enabled: boolean, extra = "") =>
+      `${enabled ? "🟢" : "🔴"} **${k}**${extra ? ` — ${extra}` : ""}`;
+    let wl: string[] = [];
+    try { wl = JSON.parse(cfg.linkWhitelist); } catch { /**/ }
+    await m.reply(
+      `🛡️ **Guard Durumu** — ${m.guild.name}\n` +
+      `${row("spam",  cfg.spamEnabled,  `eşik: ${cfg.spamThreshold} msg/5sn · aksiyon: ${cfg.spamAction}`)}\n` +
+      `${row("link",  cfg.linkEnabled,  `aksiyon: ${cfg.linkAction}${wl.length ? ` · whitelist: ${wl.join(", ")}` : ""}`)}\n` +
+      `${row("bot",   cfg.botEnabled,   `aksiyon: ${cfg.botAction}`)}\n` +
+      `${row("emoji", cfg.emojiEnabled, `max: ${cfg.emojiMax} · aksiyon: ${cfg.emojiAction}`)}\n` +
+      `${row("rol",   cfg.roleEnabled)}\n` +
+      `${row("kanal", cfg.channelEnabled)}\n` +
+      `📋 Log kanalı: ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış"}\n\n` +
+      `Kullanım: \`guard <modül> <aç/kapat> [seçenekler]\`\n` +
+      `Modüller: ${GUARD_MODULES.join(", ")}`
+    );
+    return;
+  }
+
+  // v!guard log #kanal
+  if (sub === "log") {
+    const ch = m.mentions.channels.first();
+    if (!ch) { await m.reply("❌ Kullanım: `guard log #kanal`"); return; }
+    await setGuard(m.guildId, { logChannelId: ch.id });
+    await m.reply(`✅ Guard logları <#${ch.id}> kanalına gönderilecek.`); return;
+  }
+
+  // v!guard link whitelist ekle/kaldir <domain>
+  if (sub === "link" && args[1]?.toLowerCase() === "whitelist") {
+    const action = args[2]?.toLowerCase();
+    const domain = args[3]?.toLowerCase();
+    if (!action || !domain) { await m.reply("❌ Kullanım: `guard link whitelist ekle/kaldir <domain>`"); return; }
+    const cfg = await getGuard(m.guildId);
+    let wl: string[] = [];
+    try { wl = JSON.parse(cfg.linkWhitelist); } catch { /**/ }
+    if (action === "ekle") { if (!wl.includes(domain)) wl.push(domain); }
+    else if (action === "kaldir") { wl = wl.filter(d => d !== domain); }
+    await setGuard(m.guildId, { linkWhitelist: JSON.stringify(wl) });
+    await m.reply(`✅ Link whitelist güncellendi: \`${wl.join(", ") || "(boş)"}\``); return;
+  }
+
+  // v!guard <modül> <aç/kapat> [seçenek] [değer]
+  const modül = sub as GuardModule;
+  if (!GUARD_MODULES.includes(modül)) {
+    await m.reply(`❌ Geçersiz modül. Kullanılabilir: \`${GUARD_MODULES.join(", ")}\``); return;
+  }
+  const toggle = args[1]?.toLowerCase();
+  if (!toggle || !["aç", "ac", "kapat"].includes(toggle)) {
+    await m.reply(`❌ Kullanım: \`guard ${modül} aç/kapat\``); return;
+  }
+  const enabled = toggle === "aç" || toggle === "ac";
+  const optKey = args[2]?.toLowerCase();
+  const optVal = args[3]?.toLowerCase();
+
+  const patch: Record<string, unknown> = {};
+
+  if (modül === "spam") {
+    patch.spamEnabled = enabled;
+    if (optKey === "esik" || optKey === "threshold") {
+      const v = parseInt(optVal ?? "5");
+      if (!isNaN(v) && v >= 2) patch.spamThreshold = v;
+    }
+    if (optKey === "aksiyon") {
+      if (["delete", "warn", "mute", "kick"].includes(optVal ?? "")) patch.spamAction = optVal;
+    }
+  } else if (modül === "link") {
+    patch.linkEnabled = enabled;
+    if (optKey === "aksiyon") {
+      if (["delete", "warn", "kick"].includes(optVal ?? "")) patch.linkAction = optVal;
+    }
+  } else if (modül === "bot") {
+    patch.botEnabled = enabled;
+    if (optKey === "aksiyon") {
+      if (["kick", "ban"].includes(optVal ?? "")) patch.botAction = optVal;
+    }
+  } else if (modül === "emoji") {
+    patch.emojiEnabled = enabled;
+    if (optKey === "max") {
+      const v = parseInt(optVal ?? "5");
+      if (!isNaN(v) && v >= 1) patch.emojiMax = v;
+    }
+    if (optKey === "aksiyon") {
+      if (["delete", "warn"].includes(optVal ?? "")) patch.emojiAction = optVal;
+    }
+  } else if (modül === "rol") {
+    patch.roleEnabled = enabled;
+  } else if (modül === "kanal") {
+    patch.channelEnabled = enabled;
+  }
+
+  await setGuard(m.guildId, patch as Parameters<typeof setGuard>[1]);
+  const cfg = await getGuard(m.guildId);
+  await m.reply(`${enabled ? "✅" : "🔴"} **${modül}** koruması ${enabled ? "açıldı" : "kapatıldı"}.\n\`guard durum\` ile tüm ayarları görebilirsin.`);
+  void cfg; // lint
+}
+
+// ── STAT ──────────────────────────────────────────────────────────────────────
+
+async function pfxStat(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member || !m.guildId) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageChannels")) {
+    await m.reply("❌ **Manage Channels** yetkisine ihtiyacın var."); return;
+  }
+  const sub = args[0]?.toLowerCase();
+
+  if (sub === "kaldir" || sub === "kaldır" || sub === "sil") {
+    const existing = await getStatChannels(m.guildId);
+    if (!existing) { await m.reply("❌ Bu sunucuda stat kanalları kurulu değil."); return; }
+    await removeStatChannels(m.guildId);
+    await m.reply("✅ Stat kanalları kaldırıldı. Kanalları Discord'dan manuel silebilirsin.");
+    return;
+  }
+
+  if (sub === "guncelle" || sub === "güncelle") {
+    const existing = await getStatChannels(m.guildId);
+    if (!existing) { await m.reply("❌ Önce `stat kur` ile kanalları oluştur."); return; }
+    await m.reply("⏳ Güncelleniyor...");
+    await updateStatChannels(m.guild);
+    await m.reply("✅ Stat kanalları güncellendi!");
+    return;
+  }
+
+  // varsayılan: kur
+  const status = await m.reply("⏳ Stat kanalları oluşturuluyor...");
+  try {
+    await setupStatChannels(m.guild);
+    await status.edit("✅ Stat kanalları hazır! Her 10 dakikada otomatik güncellenir.");
+  } catch (err) {
+    await status.edit("❌ Kanallar oluşturulurken hata oluştu. Bot'un **Manage Channels** yetkisi olduğundan emin ol.");
+  }
+}
+
 // ── Prefix handler tablosu ────────────────────────────────────────────────────
 
 const prefixHandlers: Record<string, PfxHandler> = {
@@ -1126,6 +1277,10 @@ const prefixHandlers: Record<string, PfxHandler> = {
   userinfo: (m) => pfxUserinfo(m), kullanicibilgi: (m) => pfxUserinfo(m), uinfo: (m) => pfxUserinfo(m),
   ping: (m) => pfxPing(m),
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
+  // Guard
+  guard: pfxGuard, koruma: pfxGuard,
+  // Stat
+  stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
 };
 
 // ── Bot başlatma ──────────────────────────────────────────────────────────────
@@ -1144,6 +1299,8 @@ export async function startBot(): Promise<void> {
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildVoiceStates,
       GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.GuildModeration,
+      GatewayIntentBits.GuildPresences,
     ],
   });
 
@@ -1265,7 +1422,31 @@ export async function startBot(): Promise<void> {
     });
   });
 
-  // ── Mesaj XP + Prefix komutlar ───────────────────────────────────────────
+  // ── Guard: Bot katılım koruması ───────────────────────────────────────────
+  client.on(Events.GuildMemberAdd, async (member: GuildMember) => {
+    await handleBotJoin(member).catch(() => null);
+  });
+
+  // ── Guard: Rol & Kanal saldırısı tespiti ─────────────────────────────────
+  client.on(Events.GuildAuditLogEntryCreate, async (entry, guild) => {
+    if (
+      entry.action === AuditLogEvent.MemberRoleUpdate ||
+      entry.action === AuditLogEvent.RoleCreate ||
+      entry.action === AuditLogEvent.RoleDelete ||
+      entry.action === AuditLogEvent.RoleUpdate
+    ) {
+      await handleRoleUpdate(guild, entry).catch(() => null);
+    }
+    if (
+      entry.action === AuditLogEvent.ChannelCreate ||
+      entry.action === AuditLogEvent.ChannelDelete ||
+      entry.action === AuditLogEvent.ChannelUpdate
+    ) {
+      await handleChannelChange(guild, entry).catch(() => null);
+    }
+  });
+
+  // ── Mesaj XP + Guard + Prefix komutlar ───────────────────────────────────
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot || !message.guildId) return;
     const prefix = await getPrefix(message.guildId).catch(() => "v!");
@@ -1279,6 +1460,13 @@ export async function startBot(): Promise<void> {
         return;
       }
     }
+
+    // Guard kontrolleri (komut olmayan mesajlarda)
+    const spamBlocked = await handleSpam(message).catch(() => false);
+    if (spamBlocked) return;
+    const linkBlocked = await handleLink(message).catch(() => false);
+    if (linkBlocked) return;
+    await handleEmoji(message).catch(() => null);
 
     // XP kazanımı
     const result = await handleXp(message.author.id, message.guildId, message.guild ?? undefined).catch(() => null);
@@ -1295,6 +1483,13 @@ export async function startBot(): Promise<void> {
       }
     }
   });
+
+  // ── Stat kanalları periyodik güncelleme (her 10 dakika) ───────────────────
+  setInterval(async () => {
+    for (const guild of client.guilds.cache.values()) {
+      await updateStatChannels(guild).catch(() => null);
+    }
+  }, 10 * 60_000);
 
   await client.login(token);
 }
