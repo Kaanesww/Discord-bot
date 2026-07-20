@@ -48,20 +48,21 @@ async function ensureSoundCloud(): Promise<void> {
   if (scInitPromise) return scInitPromise;
 
   scInitPromise = (async () => {
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         if (attempt > 1) {
-          await new Promise<void>((r) => setTimeout(r, attempt * 1500));
+          await new Promise<void>((r) => setTimeout(r, attempt * 1000));
         }
         const clientId = await play.getFreeClientID();
         if (!clientId) throw new Error("Boş client_id");
         await play.setToken({ soundcloud: { client_id: clientId } });
         scReady = true;
+        scInitPromise = null;
         logger.info({ attempt }, "SoundCloud istemci kimliği alındı");
         return;
       } catch (err) {
         logger.warn({ err, attempt }, "SoundCloud başlatma denemesi başarısız");
-        if (attempt === 4) {
+        if (attempt === 5) {
           scInitPromise = null; // sonraki çağrıda tekrar denesin
           throw new Error(`SoundCloud bağlantısı kurulamadı (${attempt} deneme)`);
         }
@@ -70,6 +71,15 @@ async function ensureSoundCloud(): Promise<void> {
   })();
 
   return scInitPromise;
+}
+
+/** Bot startup'ta müzik sistemini ısındır — ilk kullanıcı komutunu hızlandırır */
+export async function warmupMusic(): Promise<void> {
+  try {
+    await ensureSoundCloud();
+  } catch (err) {
+    logger.warn({ err }, "Müzik ısınma başarısız (ilk kullanımda tekrar denenecek)");
+  }
 }
 
 // ── Yardımcılar ───────────────────────────────────────────────────────────────
@@ -140,13 +150,29 @@ async function createSoundCloudStream(
   url: string
 ): Promise<{ stream: NodeJS.ReadableStream; type: StreamType }> {
   await ensureSoundCloud();
-  const result = await play.stream(url);
-  // play-dl'in StreamType ile @discordjs/voice StreamType eşleşmesi
+  let result: Awaited<ReturnType<typeof play.stream>>;
+  try {
+    result = await play.stream(url);
+  } catch (err: any) {
+    // Token süresi dolmuş ya da 401 — token sıfırla ve tekrar dene
+    if (
+      err?.message?.includes("401") ||
+      err?.message?.includes("403") ||
+      err?.message?.includes("client_id")
+    ) {
+      scReady = false;
+      await ensureSoundCloud();
+      result = await play.stream(url);
+    } else {
+      throw err;
+    }
+  }
+  // play-dl StreamType → @discordjs/voice StreamType doğru eşleşmesi
+  // "opus" = ham Opus çerçeveleri → ffmpeg gerekir → Arbitrary
+  // "ogg/opus" = OGG kapsayıcısı → OggOpus
+  // "webm/opus" = WebM kapsayıcısı → WebmOpus
   let dtype: StreamType;
   switch (result.type) {
-    case "opus":
-      dtype = StreamType.OggOpus;
-      break;
     case "ogg/opus":
       dtype = StreamType.OggOpus;
       break;
@@ -154,7 +180,7 @@ async function createSoundCloudStream(
       dtype = StreamType.WebmOpus;
       break;
     default:
-      dtype = StreamType.Arbitrary; // ffmpeg decode eder
+      dtype = StreamType.Arbitrary; // ham opus veya bilinmeyen → ffmpeg decode eder
   }
   return { stream: result.stream as unknown as NodeJS.ReadableStream, type: dtype };
 }

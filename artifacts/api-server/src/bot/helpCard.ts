@@ -73,6 +73,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "blackjack <bahis>",       desc: "Krupiye veya 1v1 blackjack" },
       { name: "duel @kişi <bahis>",      desc: "1v1 yazı-tura düellosu" },
       { name: "pray",                    desc: "🍀 2dk şans artışı (4dk cd)" },
+      { name: "ekono [@kişi]",           desc: "Ekonomi seviye profili" },
+      { name: "ekonlider",               desc: "Ekonomi lider tablosu" },
     ],
   },
   {

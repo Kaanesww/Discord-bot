@@ -22,7 +22,7 @@ import {
   econLevelFromXp, xpAtLevel, xpForNextLevel, econLevelReward, econRankTitle,
   type EconXpResult,
 } from "./economy";
-import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying } from "./music";
+import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying, warmupMusic } from "./music";
 import { isOwner } from "./ownerUtils";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
@@ -1098,6 +1098,7 @@ export async function startBot(): Promise<void> {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMessageReactions,
     ],
   });
 
@@ -1143,6 +1144,9 @@ export async function startBot(): Promise<void> {
 
     updateStatus();
     setInterval(updateStatus, 30_000);
+
+    // ── Müzik sistemi ön ısınma (ilk çal komutunu hızlandırır) ───────────────
+    warmupMusic().catch(() => null);
   });
 
   // ── Ses XP ───────────────────────────────────────────────────────────────
