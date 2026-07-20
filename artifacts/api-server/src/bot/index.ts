@@ -16,6 +16,10 @@ import { generateLevelUpCard } from "./levelUpCard";
 import { generateEconLevelUpCard } from "./econLevelCard";
 import { generateSicilCard } from "./sicilCard";
 import { generateHelpCard, generateCategoryHelpCard, HELP_CATEGORIES } from "./helpCard";
+import { generateEconProfileCard } from "./econProfileCard";
+import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLeaderboardCard";
+import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
+import { startMineGame, handleMineClick, mineGames } from "./mineGame";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
 import {
   getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll,
@@ -950,6 +954,7 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
 // EKONOMİ SEVİYE PROFİLİ
 async function pfxEkono(m: Message): Promise<void> {
   const target = m.mentions.users.first() ?? m.author;
+  await m.channel.sendTyping().catch(() => null);
   const bal = await getBalance(target.id);
   const xp = (bal as any).econXp as number ?? 0;
   const level = (bal as any).econLevel as number ?? 0;
@@ -959,45 +964,96 @@ async function pfxEkono(m: Message): Promise<void> {
   const xpStart = xpAtLevel(level);
   const xpNeeded = xpForNextLevel(level);
   const xpProgress = xp - xpStart;
-  const pct = Math.min(100, Math.floor((xpProgress / xpNeeded) * 100));
-  const barLen = 20;
-  const filled = Math.round((pct / 100) * barLen);
-  const bar = "█".repeat(filled) + "░".repeat(barLen - filled);
-  const title = econRankTitle(level);
   const nextReward = econLevelReward(level + 1);
-  const luckLine = luck > 0 ? "\n🍀 **|** Luck is currently **active**!" : "";
 
-  await m.reply(
-    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
-    `🏦 **${target.displayName}** · Economy Profile\n` +
-    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
-    `⭐ **Level ${level}** — ${title}\n` +
-    `📊 XP: **${xpProgress.toLocaleString("en-US")} / ${xpNeeded.toLocaleString("en-US")}** *(${pct}%)*\n` +
-    `\`[${bar}]\`\n` +
-    `${COIN} Balance: **${bal.coins.toLocaleString("en-US")} vivincy**\n` +
-    `🔥 Daily streak: **${bal.streak} days**\n` +
-    `🏆 Economy rank: **#${rank}**${luckLine}\n` +
-    `**━━━━━━━━━━━━━━━━━━━━━**\n` +
-    `🎁 Next level reward: **${COIN} ${nextReward.toLocaleString("en-US")} vivincy**`
-  );
+  try {
+    const buf = await generateEconProfileCard({
+      username: target.displayName,
+      avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
+      level,
+      xpProgress,
+      xpNeeded,
+      coins: bal.coins,
+      streak: bal.streak,
+      rank,
+      luckActive: luck > 0,
+      nextReward,
+      coinSymbol: COIN,
+    });
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "ekono.png" })] });
+  } catch (err) {
+    // Görsel üretme başarısız — metin fallback
+    const title = econRankTitle(level);
+    const pct = Math.min(100, Math.floor((xpProgress / xpNeeded) * 100));
+    const bar = "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
+    await m.reply(
+      `🏦 **${target.displayName}** · Ekonomi Profili\n` +
+      `⭐ **Seviye ${level}** — ${title}\n` +
+      `📊 XP: **${xpProgress.toLocaleString("tr-TR")} / ${xpNeeded.toLocaleString("tr-TR")}** *(${pct}%)*\n` +
+      `\`[${bar}]\`\n` +
+      `${COIN} Bakiye: **${bal.coins.toLocaleString("tr-TR")} vivincy**\n` +
+      `🔥 Streak: **${bal.streak} gün** | 🏆 Sıra: **#${rank}**\n` +
+      `🎁 Sonraki ödül: **${COIN} ${nextReward.toLocaleString("tr-TR")} vivincy**`
+    );
+  }
 }
 
 async function pfxEkonLider(m: Message): Promise<void> {
   const top = await getEconLeaderboard(10);
   if (!top.length) { await m.reply("❌ Henüz ekonomi verisi yok."); return; }
+  await m.channel.sendTyping().catch(() => null);
 
-  let msg = `**━━━━━━━━━━━━━━━━━━━━━**\n🏦 **Economy Leaderboard** — Top 10\n**━━━━━━━━━━━━━━━━━━━━━**\n`;
-  for (let i = 0; i < top.length; i++) {
-    const row = top[i]!;
-    const medal = (["🥇", "🥈", "🥉"] as string[])[i] ?? `**${i + 1}.**`;
-    const lvl = (row as any).econLevel as number ?? 0;
-    const rowXp = (row as any).econXp as number ?? 0;
-    const rankTitle = econRankTitle(lvl);
-    let username = `<@${row.userId}>`;
-    try { const u = await m.client.users.fetch(row.userId); username = u.displayName; } catch { /**/ }
-    msg += `${medal} **${username}** — Lv.**${lvl}** ${rankTitle} · ${rowXp.toLocaleString("en-US")} XP\n`;
+  const entries: EconLeaderboardEntry[] = await Promise.all(top.map(async (row, i) => {
+    let username = "Kullanıcı";
+    let avatarUrl = "";
+    try {
+      const u = await m.client.users.fetch(row.userId);
+      username = u.displayName;
+      avatarUrl = u.displayAvatarURL({ extension: "png", size: 64 });
+    } catch { /**/ }
+    return {
+      rank: i + 1,
+      userId: row.userId,
+      username,
+      avatarUrl,
+      econLevel: (row as any).econLevel as number ?? 0,
+      econXp: (row as any).econXp as number ?? 0,
+      coins: row.coins,
+    };
+  }));
+
+  try {
+    const buf = await generateEconLeaderboardCard(entries, COIN);
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "ekonlider.png" })] });
+  } catch {
+    // Metin fallback
+    let msg = `🏦 **Ekonomi Liderboard** — Top ${entries.length}\n`;
+    for (const e of entries) {
+      const medal = (["🥇", "🥈", "🥉"] as string[])[e.rank - 1] ?? `**${e.rank}.**`;
+      msg += `${medal} **${e.username}** — Lv.**${e.econLevel}** ${econRankTitle(e.econLevel)} · ${e.econXp.toLocaleString("tr-TR")} XP\n`;
+    }
+    await m.reply(msg);
   }
-  await m.reply(msg);
+}
+
+// MINE OYUNU
+async function pfxMine(m: Message, args: string[]): Promise<void> {
+  if (!m.guildId) { await m.reply("❌ Bu komut sadece sunucularda çalışır."); return; }
+
+  const bombs = parseInt(args[0] ?? "5");
+  const bet = Math.max(0, parseInt(args[1] ?? "0"));
+
+  if (isNaN(bombs) || bombs < 1 || bombs > 22) {
+    await m.reply(
+      "❌ **Kullanım:** `mine <bomba_sayısı> [bahis]`\n" +
+      "Bomba sayısı: **1-22** arası (5×5 = 25 kare)\n" +
+      "Örnek: `mine 5` · `mine 10 500`\n" +
+      "Daha fazla bomba = daha yüksek ödül çarpanı! 💥"
+    );
+    return;
+  }
+
+  await startMineGame(m, bombs, bet, COIN);
 }
 
 async function pfxPatla(m: Message): Promise<void> {
@@ -1249,25 +1305,68 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
 
   const sub = args[0]?.toLowerCase();
 
-  // v!guard → mevcut durumu göster
+  // v!guard → mevcut durumu görsel kart olarak göster
   if (!sub || sub === "durum" || sub === "status") {
     const cfg = await getGuard(m.guildId);
-    const row = (k: string, enabled: boolean, extra = "") =>
-      `${enabled ? "🟢" : "🔴"} **${k}**${extra ? ` — ${extra}` : ""}`;
     let wl: string[] = [];
     try { wl = JSON.parse(cfg.linkWhitelist); } catch { /**/ }
-    await m.reply(
-      `🛡️ **Guard Durumu** — ${m.guild.name}\n` +
-      `${row("spam",  cfg.spamEnabled,  `eşik: ${cfg.spamThreshold} msg/5sn · aksiyon: ${cfg.spamAction}`)}\n` +
-      `${row("link",  cfg.linkEnabled,  `aksiyon: ${cfg.linkAction}${wl.length ? ` · whitelist: ${wl.join(", ")}` : ""}`)}\n` +
-      `${row("bot",   cfg.botEnabled,   `aksiyon: ${cfg.botAction}`)}\n` +
-      `${row("emoji", cfg.emojiEnabled, `max: ${cfg.emojiMax} · aksiyon: ${cfg.emojiAction}`)}\n` +
-      `${row("rol",   cfg.roleEnabled)}\n` +
-      `${row("kanal", cfg.channelEnabled)}\n` +
-      `📋 Log kanalı: ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış"}\n\n` +
-      `Kullanım: \`guard <modül> <aç/kapat> [seçenekler]\`\n` +
-      `Modüller: ${GUARD_MODULES.join(", ")}`
-    );
+
+    const modules: GuardModuleInfo[] = [
+      {
+        name: "spam", displayName: "Spam Koruması", icon: "💬",
+        enabled: cfg.spamEnabled,
+        details: `Eşik: ${cfg.spamThreshold} mesaj/5sn · Aksiyon: ${cfg.spamAction}`,
+      },
+      {
+        name: "link", displayName: "Link Engeli", icon: "🔗",
+        enabled: cfg.linkEnabled,
+        details: `Aksiyon: ${cfg.linkAction}${wl.length ? ` · Whitelist: ${wl.join(", ")}` : ""}`,
+      },
+      {
+        name: "bot", displayName: "Bot Koruması", icon: "🤖",
+        enabled: cfg.botEnabled,
+        details: `Bot girişi engelleme · Aksiyon: ${cfg.botAction}`,
+      },
+      {
+        name: "emoji", displayName: "Emoji Limiti", icon: "😀",
+        enabled: cfg.emojiEnabled,
+        details: `Max: ${cfg.emojiMax} emoji/mesaj · Aksiyon: ${cfg.emojiAction}`,
+      },
+      {
+        name: "rol", displayName: "Rol Koruması", icon: "🎭",
+        enabled: cfg.roleEnabled,
+        details: "Toplu rol değişikliği tespiti (10 sn'de 5+)",
+      },
+      {
+        name: "kanal", displayName: "Kanal Koruması", icon: "📢",
+        enabled: cfg.channelEnabled,
+        details: "Toplu kanal değişikliği tespiti (10 sn'de 4+)",
+      },
+    ];
+
+    try {
+      await m.channel.sendTyping().catch(() => null);
+      const buf = await generateGuardCard({
+        guildName: m.guild.name,
+        modules,
+        logChannel: cfg.logChannelId ? `#${cfg.logChannelId}` : null,
+      });
+      await m.reply({ files: [new AttachmentBuilder(buf, { name: "guard.png" })] });
+    } catch {
+      // Metin fallback
+      const row = (k: string, enabled: boolean, extra = "") =>
+        `${enabled ? "🟢" : "🔴"} **${k}**${extra ? ` — ${extra}` : ""}`;
+      await m.reply(
+        `🛡️ **Guard Durumu** — ${m.guild.name}\n` +
+        `${row("spam",  cfg.spamEnabled,  `eşik: ${cfg.spamThreshold} msg/5sn · ${cfg.spamAction}`)}\n` +
+        `${row("link",  cfg.linkEnabled,  `${cfg.linkAction}${wl.length ? ` · whitelist: ${wl.join(", ")}` : ""}`)}\n` +
+        `${row("bot",   cfg.botEnabled,   cfg.botAction)}\n` +
+        `${row("emoji", cfg.emojiEnabled, `max ${cfg.emojiMax} · ${cfg.emojiAction}`)}\n` +
+        `${row("rol",   cfg.roleEnabled)}\n` +
+        `${row("kanal", cfg.channelEnabled)}\n` +
+        `📋 Log: ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış"}`
+      );
+    }
     return;
   }
 
@@ -1508,6 +1607,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   ekonlider: (m) => pfxEkonLider(m), elb: (m) => pfxEkonLider(m), econlb: (m) => pfxEkonLider(m),
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
+  mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
   patla: (m) => pfxPatla(m),
   zar: pfxZar, dice: pfxZar,
   "8top": pfxTop8, top8: pfxTop8,
@@ -1634,10 +1734,19 @@ export async function startBot(): Promise<void> {
     }
   });
 
-  // ── Yardım butonu etkileşimleri ──────────────────────────────────────────
+  // ── Button etkileşimleri ──────────────────────────────────────────────────
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
     const { customId } = interaction;
+
+    // Mine (mayın tarlası) butonları
+    if (customId.startsWith("mine_")) {
+      await handleMineClick(interaction, COIN).catch((err) =>
+        logger.error({ err }, "Mine tıklama hatası")
+      );
+      return;
+    }
+
     if (!customId.startsWith("help_")) return;
 
     const prefix = interaction.guildId

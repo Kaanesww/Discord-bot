@@ -91,6 +91,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     color: "#eb459e", gradient: ["#eb459e33", "#eb459e11"],
     commands: [
       { name: "rps @kişi [bahis]",       desc: "Taş-kağıt-makas" },
+      { name: "mine <bomba> [bahis]",    desc: "💣 Mayın tarlası — bomba sayısını sen seç" },
       { name: "patla [@kişi]",           desc: "Patlat! (eğlence)" },
       { name: "zar [adet]",              desc: "Zar at (1-5 adet)" },
       { name: "8top <soru>",             desc: "Sihirli 8 top" },
