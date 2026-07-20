@@ -27,6 +27,7 @@ import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlayi
 import { isOwner } from "./ownerUtils";
 import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
+import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, type ModCommand } from "./moderationSettings";
 import { AuditLogEvent, type GuildMember } from "discord.js";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
@@ -188,33 +189,47 @@ async function pfxSicil(m: Message): Promise<void> {
   await m.reply({ files: [new AttachmentBuilder(buf, { name: "sicil.png" })] });
 }
 
+// ── Mod log helper ─────────────────────────────────────────────────────────────
+async function sendModLog(m: Message, guildId: string, text: string): Promise<void> {
+  try {
+    const s = await getModSettings(guildId);
+    if (!s?.logChannelId) return;
+    const ch = await m.guild?.channels.fetch(s.logChannelId).catch(() => null);
+    if (ch?.isTextBased()) await (ch as TextChannel).send(text);
+  } catch { /**/ }
+}
+
 // MODERASYon
 async function pfxBan(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("BanMembers")) { await m.reply("❌ **Ban Members** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId) return;
+  const perm = await canUseMod(m.member, m.guildId, "ban");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.users.first();
   if (!target) { await m.reply("❌ Kullanım: `ban @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
   try {
     await m.guild.bans.create(target.id, { reason: sebep });
-    await logAction({ guildId: m.guildId!, userId: target.id, moderatorId: m.author.id, action: "ban", reason: sebep });
+    const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "ban", reason: sebep });
     await m.reply(`🔨 **${target.username}** yasaklandı. Sebep: ${sebep}`);
+    await sendModLog(m, m.guildId, `🔨 **Ban** | <@${target.id}> (${target.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
   } catch {
     await m.reply("❌ Bu kullanıcıyı yasaklayamıyorum. (Bot yetki hiyerarşisinde kullanıcının altında olabilir.)");
   }
 }
 
 async function pfxKick(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("KickMembers")) { await m.reply("❌ **Kick Members** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId) return;
+  const perm = await canUseMod(m.member, m.guildId, "kick");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.members?.first();
   if (!target) { await m.reply("❌ Kullanım: `kick @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
   if (!target.kickable && !isOwner(m.author.id)) { await m.reply("❌ Bu kullanıcıyı atamıyorum. (Yetki hiyerarşisi)"); return; }
   try {
     await target.kick(sebep);
-    await logAction({ guildId: m.guildId!, userId: target.id, moderatorId: m.author.id, action: "kick", reason: sebep });
+    const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "kick", reason: sebep });
     await m.reply(`👢 **${target.user.username}** atıldı. Sebep: ${sebep}`);
+    await sendModLog(m, m.guildId, `👢 **Kick** | <@${target.id}> (${target.user.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
   } catch {
     await m.reply("❌ Bu kullanıcıyı atamıyorum. (Bot yetki hiyerarşisinde kullanıcının altında olabilir.)");
   }
@@ -222,18 +237,21 @@ async function pfxKick(m: Message, args: string[]): Promise<void> {
 
 async function pfxWarn(m: Message, args: string[]): Promise<void> {
   if (!m.guildId || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+  const perm = await canUseMod(m.member, m.guildId, "warn");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.users.first();
   if (!target) { await m.reply("❌ Kullanım: `warn @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
   const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "warn", reason: sebep });
   await m.reply(`⚠️ **${target.username}** uyarıldı. Sebep: ${sebep} | #${log.id}`);
+  await sendModLog(m, m.guildId, `⚠️ **Uyarı** | <@${target.id}> (${target.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
   try { await target.send(`⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`); } catch { /**/ }
 }
 
 async function pfxTimeout(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId) return;
+  const perm = await canUseMod(m.member, m.guildId, "timeout");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.members?.first();
   if (!target) { await m.reply("❌ Kullanım: `timeout @kişi <süre> [sebep]`\nSüre örn: `10m`, `1sa`, `1g`"); return; }
   const durationStr = args[1];
@@ -242,31 +260,36 @@ async function pfxTimeout(m: Message, args: string[]): Promise<void> {
   if (!ms || ms < 1000 || ms > 28 * 24 * 60 * 60 * 1000) { await m.reply("❌ Geçersiz süre. Min: 1sn, Maks: 28g. Örn: `10m`, `1sa`, `2g`"); return; }
   const sebep = args.slice(2).join(" ") || "Sebep belirtilmedi";
   await target.timeout(ms, sebep);
-  await logAction({ guildId: m.guildId!, userId: target.id, moderatorId: m.author.id, action: "timeout", reason: sebep });
+  const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "timeout", reason: sebep });
   await m.reply(`⏰ **${target.user.tag}** ${durationStr} susturuldu. Sebep: ${sebep}`);
+  await sendModLog(m, m.guildId, `⏰ **Timeout** | <@${target.id}> (${target.user.tag}) | Süre: ${durationStr} | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
 }
 
 async function pfxUntimeout(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId) return;
+  const perm = await canUseMod(m.member, m.guildId, "timeout");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.members?.first();
   if (!target) { await m.reply("❌ Kullanım: `untimeout @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Susturma kaldırıldı";
   await target.timeout(null, sebep);
   await m.reply(`✅ **${target.user.tag}** susturması kaldırıldı.`);
+  await sendModLog(m, m.guildId, `🔊 **Untimeout** | <@${target.id}> (${target.user.tag}) | Mod: <@${m.author.id}>`);
 }
 
 async function pfxUnban(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("BanMembers")) { await m.reply("❌ **Ban Members** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId) return;
+  const perm = await canUseMod(m.member, m.guildId, "ban");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const userId = args[0];
   if (!userId) { await m.reply("❌ Kullanım: `unban <kullanıcı-id> [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
   try {
     const bannedUser = await m.guild.bans.fetch(userId);
     await m.guild.bans.remove(userId, `${m.author.tag}: ${sebep}`);
-    await logAction({ guildId: m.guildId!, userId, moderatorId: m.author.id, action: "unban", reason: sebep });
+    const log = await logAction({ guildId: m.guildId, userId, moderatorId: m.author.id, action: "unban", reason: sebep });
     await m.reply(`✅ **${bannedUser.user.tag}** yasağı kaldırıldı. Sebep: ${sebep}`);
+    await sendModLog(m, m.guildId, `✅ **Unban** | <@${userId}> (${bannedUser.user.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
   } catch {
     await m.reply("❌ Bu ID ile yasaklı bir kullanıcı bulunamadı.");
   }
@@ -274,7 +297,8 @@ async function pfxUnban(m: Message, args: string[]): Promise<void> {
 
 async function pfxUyariKaldir(m: Message, args: string[]): Promise<void> {
   if (!m.guildId || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
+  const perm = await canUseMod(m.member, m.guildId, "warn");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const id = parseInt(args[0] ?? "0");
   if (isNaN(id) || id < 1) { await m.reply("❌ Kullanım: `uyarikaldir <uyarı-id>`"); return; }
   const existing = await getLogById(id, m.guildId);
@@ -285,8 +309,9 @@ async function pfxUyariKaldir(m: Message, args: string[]): Promise<void> {
 }
 
 async function pfxTemizle(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member || !(m.channel instanceof TextChannel)) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageMessages")) { await m.reply("❌ **Manage Messages** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId || !(m.channel instanceof TextChannel)) return;
+  const perm = await canUseMod(m.member, m.guildId, "temizle");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const n = Math.min(parseInt(args[0] ?? "10") || 10, 100);
   const msgs = await m.channel.messages.fetch({ limit: n + 1 });
   const deleted = await m.channel.bulkDelete(msgs, true);
@@ -295,9 +320,11 @@ async function pfxTemizle(m: Message, args: string[]): Promise<void> {
 }
 
 async function pfxNuke(m: Message): Promise<void> {
-  if (!m.guild || !(m.channel instanceof TextChannel)) return;
+  if (!m.guild || !m.guildId || !(m.channel instanceof TextChannel)) return;
+  // Nuke sadece sunucu sahibi veya Admin — temizle iznini de kontrol et
+  const perm = await canUseMod(m.member!, m.guildId, "temizle");
   const isAdmin = m.member?.permissions.has("Administrator") ?? false;
-  if (!isOwner(m.author.id) && m.guild.ownerId !== m.author.id && !isAdmin) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
+  if (!perm.ok && !isAdmin && m.guild.ownerId !== m.author.id) { await m.reply("❌ Sadece sunucu sahibi veya yöneticiler kullanabilir."); return; }
   const ch = m.channel;
   const { name, topic, nsfw, rateLimitPerUser, position, parentId } = ch;
   const overwrites = ch.permissionOverwrites.cache.map((o) => ({ id: o.id, allow: o.allow, deny: o.deny, type: o.type }));
@@ -307,17 +334,137 @@ async function pfxNuke(m: Message): Promise<void> {
 }
 
 async function pfxKilitle(m: Message): Promise<void> {
-  if (!m.guild || !m.member || !(m.channel instanceof TextChannel)) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageChannels")) { await m.reply("❌ **Manage Channels** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId || !(m.channel instanceof TextChannel)) return;
+  const perm = await canUseMod(m.member, m.guildId, "mute");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   await m.channel.permissionOverwrites.edit(m.guild.id, { SendMessages: false });
   await m.reply("🔒 Kanal kilitlendi.");
+  await sendModLog(m, m.guildId, `🔒 **Kanal Kilidi** | <#${m.channel.id}> | Mod: <@${m.author.id}>`);
 }
 
 async function pfxAc(m: Message): Promise<void> {
-  if (!m.guild || !m.member || !(m.channel instanceof TextChannel)) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageChannels")) { await m.reply("❌ **Manage Channels** iznin yok."); return; }
+  if (!m.guild || !m.member || !m.guildId || !(m.channel instanceof TextChannel)) return;
+  const perm = await canUseMod(m.member, m.guildId, "mute");
+  if (!perm.ok) { await m.reply(perm.reason!); return; }
   await m.channel.permissionOverwrites.edit(m.guild.id, { SendMessages: null });
   await m.reply("🔓 Kanal kilidi açıldı.");
+  await sendModLog(m, m.guildId, `🔓 **Kanal Kilidi Açıldı** | <#${m.channel.id}> | Mod: <@${m.author.id}>`);
+}
+
+// ── MODSETUP ──────────────────────────────────────────────────────────────────
+
+const MOD_CMD_NAMES: Record<string, ModCommand> = {
+  ban: "ban", unban: "ban",
+  kick: "kick",
+  warn: "warn", uyarikaldir: "warn",
+  timeout: "timeout", sustur: "timeout", untimeout: "timeout",
+  kilitle: "mute", kilitac: "mute",
+  temizle: "temizle", nuke: "temizle",
+};
+
+const MOD_CMD_LABELS: Record<ModCommand, string> = {
+  ban:     "ban / unban",
+  kick:    "kick",
+  warn:    "warn / uyarikaldir",
+  timeout: "timeout / sustur / untimeout",
+  mute:    "kilitle / kanal aç",
+  temizle: "temizle / nuke",
+};
+
+async function pfxModSetup(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+  // Sadece sunucu sahibi veya bot sahibi
+  if (!isOwner(m.author.id) && m.guild.ownerId !== m.author.id) {
+    await m.reply("❌ Bu komutu sadece **sunucu sahibi** kullanabilir."); return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+
+  // ── modsetup durum ────────────────────────────────────────────────────────
+  if (!sub || sub === "durum" || sub === "status") {
+    const s = await getModSettings(m.guildId);
+    const enabled = s?.enabled ?? false;
+    const log = s?.logChannelId ? `<#${s.logChannelId}>` : "Ayarlanmamış";
+
+    const cmdList = (Object.entries(MOD_CMD_LABELS) as [ModCommand, string][]).map(([cmd, label]) => {
+      const roles: string[] = s ? JSON.parse((s as any)[`${cmd}Roles`] ?? "[]") : [];
+      const roleStr = roles.length ? roles.map(r => `<@&${r}>`).join(", ") : "*(sadece Discord izni)*";
+      return `**${label}** → ${roleStr}`;
+    });
+
+    await m.reply(
+      `🛡️ **Moderasyon Sistemi** — ${m.guild.name}\n` +
+      `Durum: ${enabled ? "🟢 **Aktif**" : "🔴 **Kapalı**"}\n` +
+      `📋 Log kanalı: ${log}\n\n` +
+      `**Komut Rol İzinleri:**\n${cmdList.join("\n")}\n\n` +
+      `**Komutlar:**\n` +
+      "`modsetup aç/kapat` — Sistemi aç/kapat\n" +
+      "`modsetup log #kanal` — Log kanalı ayarla\n" +
+      "`modsetup rol <komut> @rol` — Role izin ver\n" +
+      "`modsetup rolkaldir <komut> @rol` — Rolü kaldır\n" +
+      `Komutlar: \`${Object.keys(MOD_CMD_NAMES).join(", ")}\``
+    );
+    return;
+  }
+
+  // ── modsetup aç / kapat ───────────────────────────────────────────────────
+  if (sub === "aç" || sub === "ac" || sub === "on" || sub === "enable") {
+    await setModEnabled(m.guildId, true);
+    await m.reply(
+      "🟢 **Moderasyon sistemi aktif edildi!**\n" +
+      "Şu an tüm mod komutları Discord native iznine bakıyor.\n" +
+      "`modsetup rol <komut> @rol` ile rollere özel izin tanımlayabilirsin.\n" +
+      "`modsetup log #kanal` ile mod loglarını bir kanala yönlendir."
+    );
+    return;
+  }
+
+  if (sub === "kapat" || sub === "off" || sub === "disable") {
+    await setModEnabled(m.guildId, false);
+    await m.reply("🔴 **Moderasyon sistemi kapatıldı.** Tüm mod komutları devre dışı.");
+    return;
+  }
+
+  // ── modsetup log #kanal ───────────────────────────────────────────────────
+  if (sub === "log") {
+    const ch = m.mentions.channels.first();
+    if (!ch) { await m.reply("❌ Kullanım: `modsetup log #kanal`"); return; }
+    await setModLogChannel(m.guildId, ch.id);
+    await m.reply(`✅ Mod log kanalı <#${ch.id}> olarak ayarlandı.`);
+    return;
+  }
+
+  // ── modsetup rol <komut> @rol ─────────────────────────────────────────────
+  if (sub === "rol" || sub === "role") {
+    const cmdKey = args[1]?.toLowerCase();
+    const role   = m.mentions.roles.first();
+    if (!cmdKey || !role) { await m.reply("❌ Kullanım: `modsetup rol <komut> @rol`\nKomutlar: `ban, kick, warn, timeout, kilitle, temizle`"); return; }
+    const cmd = MOD_CMD_NAMES[cmdKey];
+    if (!cmd) { await m.reply(`❌ Geçersiz komut: \`${cmdKey}\`\nGeçerli: \`${Object.keys(MOD_CMD_NAMES).join(", ")}\``); return; }
+    const roles = await addRoleForCmd(m.guildId, cmd, role.id);
+    await m.reply(`✅ **${role.name}** rolüne \`${MOD_CMD_LABELS[cmd]}\` izni verildi.\nToplam roller: ${roles.map(r => `<@&${r}>`).join(", ")}`);
+    return;
+  }
+
+  // ── modsetup rolkaldir <komut> @rol ──────────────────────────────────────
+  if (sub === "rolkaldir" || sub === "rolkaldır" || sub === "removerole") {
+    const cmdKey = args[1]?.toLowerCase();
+    const role   = m.mentions.roles.first();
+    if (!cmdKey || !role) { await m.reply("❌ Kullanım: `modsetup rolkaldir <komut> @rol`"); return; }
+    const cmd = MOD_CMD_NAMES[cmdKey];
+    if (!cmd) { await m.reply(`❌ Geçersiz komut: \`${cmdKey}\``); return; }
+    const roles = await removeRoleForCmd(m.guildId, cmd, role.id);
+    await m.reply(`✅ **${role.name}** rolünün \`${MOD_CMD_LABELS[cmd]}\` izni kaldırıldı.\nKalan roller: ${roles.length ? roles.map(r => `<@&${r}>`).join(", ") : "*(yok)*"}`);
+    return;
+  }
+
+  await m.reply(
+    "❌ Geçersiz alt komut.\n" +
+    "`modsetup aç` / `modsetup kapat` / `modsetup durum`\n" +
+    "`modsetup log #kanal`\n" +
+    "`modsetup rol <komut> @rol`\n" +
+    "`modsetup rolkaldir <komut> @rol`"
+  );
 }
 
 // ── Ekonomi seviye-atlama bildirimi ───────────────────────────────────────────
@@ -1380,6 +1527,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
   // Guard
   guard: pfxGuard, koruma: pfxGuard,
+  // Moderasyon ayarları
+  modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
   // Stat
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
 };

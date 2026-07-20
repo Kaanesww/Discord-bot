@@ -47,6 +47,12 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "temizle [adet]",          desc: "Toplu mesaj siler (maks 100)" },
       { name: "nuke",                    desc: "Kanalı temizler & yeniden açar" },
       { name: "sicil @kişi",             desc: "Sicil kayıt kartı" },
+      { name: "modsetup aç",            desc: "Moderasyonu aktif eder (Sahip)" },
+      { name: "modsetup kapat",         desc: "Moderasyonu devre dışı bırakır" },
+      { name: "modsetup durum",         desc: "Mod ayarlarını & rolleri gösterir" },
+      { name: "modsetup rol <k> @rol",  desc: "Role mod komutu izni ver" },
+      { name: "modsetup rolkaldir <k> @r", desc: "Rol iznini kaldırır" },
+      { name: "modsetup log #kanal",    desc: "Mod işlemlerini kanala loglar" },
     ],
   },
   {
