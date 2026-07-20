@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Database files (runtime, must not be committed)
+*.db
+*.sqlite
+*.sqlite3
+data/bot.db

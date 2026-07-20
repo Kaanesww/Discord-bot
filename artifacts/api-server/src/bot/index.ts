@@ -9,10 +9,11 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { logger } from "../lib/logger";
 import { handleXp, getUserLevel, getRank, xpToNextLevel, getLeaderboard, getLevelRoles, setLevelRole, removeLevelRole } from "./leveling";
-import { getPrefix, setPrefix as setPrefixUtil } from "./guildSettings";
+import { getPrefix, setPrefix as setPrefixUtil, getLevelEnabled, setLevelEnabled } from "./guildSettings";
 import { generateProfileCard } from "./profileCard";
 import { generateLeaderboardCard, type LeaderboardEntry } from "./leaderboardCard";
 import { generateLevelUpCard } from "./levelUpCard";
+import { generateEconLevelUpCard } from "./econLevelCard";
 import { generateSicilCard } from "./sicilCard";
 import { generateHelpCard, generateCategoryHelpCard, HELP_CATEGORIES } from "./helpCard";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
@@ -324,12 +325,27 @@ async function notifyEconLevelUp(m: Message, result: EconXpResult): Promise<void
   if (!result.leveled) return;
   const highest = result.newLevels[result.newLevels.length - 1]!;
   const title = econRankTitle(highest);
-  const nextReward = econLevelReward(highest + 1);
-  await m.channel.send(
-    `🎉 **${m.author.displayName}** reached **Economy Level ${highest}** — ${title}!\n` +
-    `${COIN} **+${result.totalReward.toLocaleString("en-US")} vivincy** level reward added!\n` +
-    `\u200b *Next level reward: ${COIN} ${nextReward.toLocaleString("en-US")} vivincy*`
-  ).catch(() => null);
+  try {
+    const buf = await generateEconLevelUpCard({
+      username: m.author.displayName,
+      avatarUrl: m.author.displayAvatarURL({ extension: "png", size: 256 }),
+      newLevel: highest,
+      reward: result.totalReward,
+      rankTitle: title,
+      coinSymbol: COIN,
+    });
+    await m.channel.send({
+      content: `${m.author}`,
+      files: [new AttachmentBuilder(buf, { name: "ekon-levelup.png" })],
+    });
+  } catch {
+    const nextReward = econLevelReward(highest + 1);
+    await m.channel.send(
+      `💹 **${m.author.displayName}** ekonomi seviye **${highest}**'e ulaştı — ${title}!\n` +
+      `${COIN} **+${result.totalReward.toLocaleString("en-US")} vivincy** ödülü eklendi!\n` +
+      `\u200b *Sonraki seviye ödülü: ${COIN} ${nextReward.toLocaleString("en-US")} vivincy*`
+    ).catch(() => null);
+  }
 }
 
 // EKONOMİ
@@ -1194,6 +1210,44 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
   }
   const sub = args[0]?.toLowerCase();
 
+  // stat durum — mevcut sunucu istatistiklerini embed olarak göster
+  if (!sub || sub === "durum" || sub === "status" || sub === "goster" || sub === "göster") {
+    await m.guild.members.fetch().catch(() => null);
+    const guild = m.guild;
+    const total   = guild.memberCount;
+    const bots    = guild.members.cache.filter(mem => mem.user.bot).size;
+    const humans  = total - bots;
+    const online  = guild.members.cache.filter(mem => !mem.user.bot && mem.presence?.status !== "offline" && mem.presence !== null).size;
+    const chCount = guild.channels.cache.filter(c => c.type !== ChannelType.GuildCategory).size;
+    const rlCount = guild.roles.cache.size - 1;
+    const owner   = await guild.fetchOwner().catch(() => null);
+    const createdAt = Math.floor(guild.createdTimestamp / 1000);
+    const existing = await getStatChannels(m.guildId);
+
+    const { EmbedBuilder, Colors } = await import("discord.js");
+    const embed = new EmbedBuilder()
+      .setTitle(`📊 ${guild.name} — Sunucu İstatistikleri`)
+      .setThumbnail(guild.iconURL({ size: 256 }))
+      .setColor(0x00e676 as any)
+      .addFields(
+        { name: "👥 Toplam Üye",    value: `**${total.toLocaleString("tr-TR")}**`,   inline: true },
+        { name: "🧑 İnsan",          value: `**${humans.toLocaleString("tr-TR")}**`,  inline: true },
+        { name: "🤖 Bot",            value: `**${bots.toLocaleString("tr-TR")}**`,    inline: true },
+        { name: "🟢 Çevrimiçi",     value: `**${online.toLocaleString("tr-TR")}**`,   inline: true },
+        { name: "📢 Kanal Sayısı",  value: `**${chCount.toLocaleString("tr-TR")}**`,  inline: true },
+        { name: "🎭 Rol Sayısı",    value: `**${rlCount.toLocaleString("tr-TR")}**`,   inline: true },
+        { name: "👑 Sunucu Sahibi", value: owner ? `${owner.user.tag}` : "Bilinmiyor", inline: true },
+        { name: "📅 Oluşturulma",   value: `<t:${createdAt}:D>`, inline: true },
+        { name: "🚀 Boost Seviyesi",value: `Tier ${guild.premiumTier} (${guild.premiumSubscriptionCount ?? 0} boost)`, inline: true },
+        { name: "📡 Stat Kanalları",value: existing ? "✅ Kurulu — her 10 dk otomatik güncellenir" : "❌ Kurulmamış — `stat kur` ile kur", inline: false },
+      )
+      .setFooter({ text: `${m.author.tag} tarafından istendi` })
+      .setTimestamp();
+
+    await m.reply({ embeds: [embed] });
+    return;
+  }
+
   if (sub === "kaldir" || sub === "kaldır" || sub === "sil") {
     const existing = await getStatChannels(m.guildId);
     if (!existing) { await m.reply("❌ Bu sunucuda stat kanalları kurulu değil."); return; }
@@ -1211,22 +1265,69 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  // varsayılan: kur
-  const status = await m.reply("⏳ Stat kanalları oluşturuluyor...");
-  try {
-    await setupStatChannels(m.guild);
-    await status.edit("✅ Stat kanalları hazır! Her 10 dakikada otomatik güncellenir.");
-  } catch (err) {
-    await status.edit("❌ Kanallar oluşturulurken hata oluştu. Bot'un **Manage Channels** yetkisi olduğundan emin ol.");
+  if (sub === "kur") {
+    const status = await m.reply("⏳ Stat kanalları oluşturuluyor...");
+    try {
+      await setupStatChannels(m.guild);
+      await status.edit("✅ Stat kanalları hazır! Her 10 dakikada otomatik güncellenir.");
+    } catch {
+      await status.edit("❌ Kanallar oluşturulurken hata oluştu. Bot'un **Manage Channels** yetkisi olduğundan emin ol.");
+    }
+    return;
   }
+
+  // Bilinmeyen alt komut → yardım
+  await m.reply(
+    "📡 **Stat Komutları:**\n" +
+    "`stat` / `stat durum` — Sunucu istatistiklerini gösterir\n" +
+    "`stat kur` — Ses kanallarında canlı stat paneli oluşturur\n" +
+    "`stat güncelle` — Stat kanallarını manuel günceller\n" +
+    "`stat kaldir` — Stat kanallarını siler"
+  );
+}
+
+// ── LEVEL TOGGLE ──────────────────────────────────────────────────────────────
+
+async function pfxLevelToggle(m: Message, args: string[]): Promise<void> {
+  if (!m.guildId || !m.member) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
+    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var."); return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+
+  if (!sub || sub === "durum" || sub === "status") {
+    const enabled = await getLevelEnabled(m.guildId);
+    await m.reply(
+      `⭐ **Level Sistemi Durumu:** ${enabled ? "🟢 Açık" : "🔴 Kapalı"}\n` +
+      `Değiştirmek için: \`level aç\` veya \`level kapat\``
+    );
+    return;
+  }
+
+  if (sub === "aç" || sub === "ac" || sub === "on" || sub === "enable") {
+    await setLevelEnabled(m.guildId, true);
+    await m.reply("🟢 **Level sistemi açıldı!** Artık mesaj atıldıkça XP kazanılacak.");
+    return;
+  }
+
+  if (sub === "kapat" || sub === "off" || sub === "disable") {
+    await setLevelEnabled(m.guildId, false);
+    await m.reply("🔴 **Level sistemi kapatıldı.** Artık XP kazanılmayacak.");
+    return;
+  }
+
+  await m.reply("❌ Kullanım: `level aç` / `level kapat` / `level durum`");
 }
 
 // ── Prefix handler tablosu ────────────────────────────────────────────────────
 
 const prefixHandlers: Record<string, PfxHandler> = {
-  // Level / Profil
-  level: (m) => pfxLevel(m), lvl: (m) => pfxLevel(m), rank: (m) => pfxLevel(m),
+  // Level / Profil / Toggle
+  level: (m, a) => a[0] && ["aç","ac","kapat","off","on","enable","disable","durum","status"].includes(a[0].toLowerCase()) ? pfxLevelToggle(m, a) : pfxLevel(m),
+  lvl: (m) => pfxLevel(m), rank: (m) => pfxLevel(m),
   profil: (m) => pfxLevel(m), profile: (m) => pfxLevel(m),
+  levelsistemi: pfxLevelToggle, leveltoggle: pfxLevelToggle,
   // Leaderboard
   leaderboard: (m) => pfxLeaderboard(m), lb: (m) => pfxLeaderboard(m), top: (m) => pfxLeaderboard(m),
   // Level rol
@@ -1468,7 +1569,9 @@ export async function startBot(): Promise<void> {
     if (linkBlocked) return;
     await handleEmoji(message).catch(() => null);
 
-    // XP kazanımı
+    // XP kazanımı — level sistemi kapalıysa atla
+    const levelEnabled = await getLevelEnabled(message.guildId).catch(() => true);
+    if (!levelEnabled) return;
     const result = await handleXp(message.author.id, message.guildId, message.guild ?? undefined).catch(() => null);
     if (result?.leveledUp) {
       try {

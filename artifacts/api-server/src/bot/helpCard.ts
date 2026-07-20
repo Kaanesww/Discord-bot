@@ -58,6 +58,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "levelrol ekle <lvl> @rol",desc: "Seviye rol ödülü ekler" },
       { name: "levelrol liste",          desc: "Tüm rol ödüllerini listeler" },
       { name: "levelrol kaldir <lvl>",   desc: "Rol ödülünü kaldırır" },
+      { name: "level aç",               desc: "Level sistemini açar (Admin)" },
+      { name: "level kapat",            desc: "Level sistemini kapatır (Admin)" },
+      { name: "level durum",            desc: "Level sisteminin durumunu gösterir" },
     ],
   },
   {
@@ -109,6 +112,10 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "userinfo [@kişi]",        desc: "Kullanıcı bilgileri" },
       { name: "ping",                    desc: "Bot gecikme ölçümü" },
       { name: "yardim [kategori]",       desc: "Komut rehberi" },
+      { name: "stat",                    desc: "Sunucu istatistiklerini gösterir" },
+      { name: "stat kur",                desc: "Canlı stat kanalları oluşturur" },
+      { name: "stat güncelle",           desc: "Stat kanallarını manuel günceller" },
+      { name: "stat kaldir",             desc: "Stat kanallarını kaldırır" },
     ],
   },
   {
