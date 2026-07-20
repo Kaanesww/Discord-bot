@@ -4,6 +4,9 @@ import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   type Message,
 } from "discord.js";
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { logger } from "../lib/logger";
 import { handleXp, getUserLevel, getRank, xpToNextLevel, getLeaderboard, getLevelRoles, setLevelRole, removeLevelRole } from "./leveling";
 import { getPrefix, setPrefix as setPrefixUtil } from "./guildSettings";
@@ -16,6 +19,9 @@ import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation"
 import { getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll } from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying } from "./music";
 import { isOwner } from "./ownerUtils";
+
+// ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
+let COIN = "🪙"; // fallback, uygulama emojisi yüklenince güncellenir
 
 // ── Tip tanımları ─────────────────────────────────────────────────────────────
 
@@ -304,7 +310,7 @@ async function pfxBakiye(m: Message): Promise<void> {
   const luck = await getLuck(target.id);
   const luckLine = luck > 0 ? "\n🍀 **|** Luck is currently **active**!" : "";
   await m.reply(
-    `💎 **| ${target.displayName}**, you currently have **__${bal.coins.toLocaleString("en-US")}__ vivincy**!\n` +
+    `${COIN} **| ${target.displayName}**, you currently have **__${bal.coins.toLocaleString("en-US")}__ vivincy**!\n` +
     `\u200b **|** 🔥 Daily streak: **${bal.streak} days**${luckLine}`
   );
 }
@@ -329,11 +335,11 @@ async function pfxGunlukodul(m: Message): Promise<void> {
   }
 
   let msg =
-    `💰 **| ${m.author.displayName}**, Here is your daily **💎 ${r.reward.toLocaleString("en-US")} vivincy**!\n` +
+    `💰 **| ${m.author.displayName}**, Here is your daily **${COIN} ${r.reward.toLocaleString("en-US")} vivincy**!\n` +
     `\u200b **|** You're on a **${r.streak} daily streak**!\n`;
 
   if (r.lootbox) {
-    msg += `**📦 |** You received a **lootbox**! **+${r.lootboxAmount.toLocaleString("en-US")} vivincy** bonus!\n`;
+    msg += `**📦 |** You received a **lootbox**! **${COIN} +${r.lootboxAmount.toLocaleString("en-US")} vivincy** bonus!\n`;
   }
 
   msg += `**⏱️ |** Your next daily is in: **${formatTime(20 * 60 * 60 * 1000)}**`;
@@ -347,17 +353,17 @@ async function pfxTransfer(m: Message, args: string[]): Promise<void> {
   if (!target || isNaN(amount) || amount < 1) { await m.reply("❌ Kullanım: `transfer @kişi <miktar>`"); return; }
   if (target.id === m.author.id) { await m.reply("❌ Kendine coin gönderemezsin."); return; }
   const bal = await getBalance(m.author.id);
-  if (bal.coins < amount) { await m.reply(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (bal.coins < amount) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
   await takeCoins(m.author.id, amount);
   const newTarget = await addCoins(target.id, amount);
-  await m.reply(`💸 **${m.author.displayName}** → **${target.displayName}** | **${amount.toLocaleString("en-US")} vivincy** gönderildi!\n${target.displayName} yeni bakiye: **${newTarget.toLocaleString("en-US")} vivincy**`);
+  await m.reply(`💸 **${m.author.displayName}** → **${target.displayName}** | **${COIN} ${amount.toLocaleString("en-US")} vivincy** gönderildi!\n${target.displayName} yeni bakiye: **${COIN} ${newTarget.toLocaleString("en-US")} vivincy**`);
 }
 
 async function pfxKumar(m: Message, args: string[]): Promise<void> {
   const bet = parseInt(args[0] ?? "0");
   if (isNaN(bet) || bet < 10) { await m.reply("❌ Kullanım: `slot <bahis>` (min 10)"); return; }
   const bal = await getBalance(m.author.id);
-  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
 
   const luck = await getLuck(m.author.id);
   const SLOTS = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣", "⭐"];
@@ -376,7 +382,7 @@ async function pfxKumar(m: Message, args: string[]): Promise<void> {
   function frame(r1: string, r2: string, r3: string, resultLine = ""): string {
     return (
       `**\`___SLOTS___\`**${luckTag}\n` +
-      `\` \` ${r1} ${r2} ${r3} \` \` ${name} bet 💎 ${betStr}\n` +
+      `\` \` ${r1} ${r2} ${r3} \` \` ${name} bet ${COIN} ${betStr}\n` +
       `\`|         |\`${resultLine ? `   ${resultLine}` : ""}\n` +
       `\`|         |\``
     );
@@ -413,8 +419,8 @@ async function pfxKumar(m: Message, args: string[]): Promise<void> {
   else { newBal = bal.coins; }
 
   const resultLine = multiplier > 0
-    ? `${label} **+${diff.toLocaleString("en-US")} vivincy** | Total: ${newBal.toLocaleString("en-US")}`
-    : `${label} **-${bet.toLocaleString("en-US")} vivincy** | Total: ${newBal.toLocaleString("en-US")}`;
+    ? `${label} **${COIN} +${diff.toLocaleString("en-US")} vivincy** | Total: ${newBal.toLocaleString("en-US")}`
+    : `${label} **${COIN} -${bet.toLocaleString("en-US")} vivincy** | Total: ${newBal.toLocaleString("en-US")}`;
 
   await msg.edit(frame(s1, s2, s3, resultLine)).catch(() => null);
 }
@@ -424,7 +430,7 @@ async function pfxRulet(m: Message, args: string[]): Promise<void> {
   const bet = parseInt(args[1] ?? "0");
   if (!secim || isNaN(bet) || bet < 10) { await m.reply("❌ Kullanım: `rulet <kirmizi|siyah|yesil|0-36> <bahis>`"); return; }
   const bal = await getBalance(m.author.id);
-  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
 
   const RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
   const luck = await getLuck(m.author.id);
@@ -463,8 +469,8 @@ async function pfxRulet(m: Message, args: string[]): Promise<void> {
   await m.reply(
     `🎡 **Rulet**${luckStr}\nTop düştü: **${colorEmoji} ${result}** | Seçimin: **${secim}**\n\n` +
     `${win ? "🏆 **KAZANDIN!**" : "💸 **Kaybettin!**"}\n` +
-    `Bahis: **${bet.toLocaleString("en-US")} vivincy** | ${win ? "Kazanç" : "Kayıp"}: **${diffText} vivincy** | Çarpan: x${multiplier}\n` +
-    `Yeni bakiye: **${newBal.toLocaleString("en-US")} vivincy**`
+    `Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy** | ${win ? "Kazanç" : "Kayıp"}: **${COIN} ${diffText} vivincy** | Çarpan: x${multiplier}\n` +
+    `Yeni bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`
   );
 }
 
@@ -475,7 +481,7 @@ async function pfxCoinflip(m: Message, args: string[]): Promise<void> {
     await m.reply("❌ Kullanım: `coinflip <taş/yazı> <bahis>` (min 10)"); return;
   }
   const bal = await getBalance(m.author.id);
-  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
 
   const luck = await getLuck(m.author.id);
   const winChance = luck > 0 ? 0.57 : 0.5;
@@ -486,10 +492,10 @@ async function pfxCoinflip(m: Message, args: string[]): Promise<void> {
 
   if (win) {
     const newBal = await addCoins(m.author.id, bet);
-    await m.reply(`${result}\n✅ **KAZANDIN!${luckStr} +${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${newBal.toLocaleString("en-US")} vivincy**`);
+    await m.reply(`${result}\n✅ **KAZANDIN!${luckStr} ${COIN} +${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
   } else {
     const newBal = await takeCoins(m.author.id, bet);
-    await m.reply(`${result}\n💸 **Kaybettin! -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${newBal.toLocaleString("en-US")} vivincy**`);
+    await m.reply(`${result}\n💸 **Kaybettin! ${COIN} -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
   }
 }
 
@@ -497,7 +503,7 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   const bet = parseInt(args[0] ?? "0");
   if (isNaN(bet) || bet < 10) { await m.reply("❌ Kullanım: `blackjack <bahis>` (min 10)"); return; }
   const bal = await getBalance(m.author.id);
-  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (bal.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${bal.coins.toLocaleString("en-US")} vivincy**`); return; }
 
   const luck = await getLuck(m.author.id);
   const deck = createDeck();
@@ -511,11 +517,11 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   // Blackjack instant win check
   if (handValue(playerHand) === 21) {
     const newBal = await addCoins(m.author.id, Math.round(bet * 1.5));
-    await m.reply(`${showHands(false)}\n\n🃏 **BLACKJACK! +${Math.round(bet * 1.5).toLocaleString("en-US")} vivincy** | Bakiye: **${newBal.toLocaleString("en-US")} vivincy**`);
+    await m.reply(`${showHands(false)}\n\n🃏 **BLACKJACK! ${COIN} +${Math.round(bet * 1.5).toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
     return;
   }
 
-  const msg = await m.reply(`🃏 **Blackjack** (Bahis: **${bet.toLocaleString("en-US")} vivincy**)\n${showHands()}\n\n✅ = Kart al | ❌ = Dur (15 sn)`);
+  const msg = await m.reply(`🃏 **Blackjack** (Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy**)\n${showHands()}\n\n✅ = Kart al | ❌ = Dur (15 sn)`);
   try { await msg.react("✅"); await msg.react("❌"); } catch { /**/ }
 
   let hit = false;
@@ -531,7 +537,7 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
     playerHand.push(drawCard(deck));
     if (handValue(playerHand) > 21) {
       const newBal = await takeCoins(m.author.id, bet);
-      await msg.edit(`${showHands(false)}\n\n💥 **Battın! -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${newBal.toLocaleString("en-US")} vivincy**`);
+      await msg.edit(`${showHands(false)}\n\n💥 **Battın! ${COIN} -${bet.toLocaleString("en-US")} vivincy** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
       return;
     }
   }
@@ -543,12 +549,12 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   const luckSave = luck > 0 && dv <= 21 && pv < dv && Math.random() < 0.12;
 
   let result: string; let newBal: number;
-  if (pv > 21) { newBal = await takeCoins(m.author.id, bet); result = `💥 Battın! -${bet.toLocaleString("en-US")} vivincy`; }
-  else if (dv > 21 || luckSave || pv > dv) { newBal = await addCoins(m.author.id, bet); result = `🏆 Kazandın! +${bet.toLocaleString("en-US")} vivincy${luckSave ? " 🍀 Şans!" : ""}`; }
+  if (pv > 21) { newBal = await takeCoins(m.author.id, bet); result = `💥 Battın! ${COIN} -${bet.toLocaleString("en-US")} vivincy`; }
+  else if (dv > 21 || luckSave || pv > dv) { newBal = await addCoins(m.author.id, bet); result = `🏆 Kazandın! ${COIN} +${bet.toLocaleString("en-US")} vivincy${luckSave ? " 🍀 Şans!" : ""}`; }
   else if (pv === dv) { newBal = bal.coins; result = "🤝 Berabere!"; }
-  else { newBal = await takeCoins(m.author.id, bet); result = `💸 Kaybettin! -${bet.toLocaleString("en-US")} vivincy`; }
+  else { newBal = await takeCoins(m.author.id, bet); result = `💸 Kaybettin! ${COIN} -${bet.toLocaleString("en-US")} vivincy`; }
 
-  await msg.edit(`${showHands(false)}\n\n**${result}** | Bakiye: **${newBal.toLocaleString("en-US")} vivincy**`);
+  await msg.edit(`${showHands(false)}\n\n**${result}** | Bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`);
 }
 
 async function pfxDuel(m: Message, args: string[]): Promise<void> {
@@ -558,10 +564,10 @@ async function pfxDuel(m: Message, args: string[]): Promise<void> {
   if (target.id === m.author.id || target.bot) { await m.reply("❌ Geçersiz hedef."); return; }
   const balA = await getBalance(m.author.id);
   const balB = await getBalance(target.id);
-  if (balA.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${balA.coins.toLocaleString("en-US")} vivincy**`); return; }
+  if (balA.coins < bet) { await m.reply(`❌ Yetersiz bakiye: **${COIN} ${balA.coins.toLocaleString("en-US")} vivincy**`); return; }
   if (balB.coins < bet) { await m.reply(`❌ **${target.displayName}** yetersiz bakiye.`); return; }
 
-  const challenge = await m.reply(`⚔️ **${m.author.displayName}** vs **${target.displayName}** — Bahis: **${bet.toLocaleString("en-US")} vivincy**\n${target}, katılmak için ✅, reddetmek için ❌ ekle. (30 sn)`);
+  const challenge = await m.reply(`⚔️ **${m.author.displayName}** vs **${target.displayName}** — Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy**\n${target}, katılmak için ✅, reddetmek için ❌ ekle. (30 sn)`);
   try { await challenge.react("✅"); await challenge.react("❌"); } catch { /**/ }
 
   let accepted = false;
@@ -586,8 +592,8 @@ async function pfxDuel(m: Message, args: string[]): Promise<void> {
 
   await challenge.edit(
     `⚔️ **Düello Sonucu**\n\`\`\`\n🪙 Yazı-Tura\`\`\`\n` +
-    `🏆 **${winner.displayName}** kazandı! **+${bet.toLocaleString("en-US")} vivincy**${(winA ? luckA : luckB) > 0 ? " 🍀" : ""}\n` +
-    `Kazanan yeni bakiye: **${newBal.toLocaleString("en-US")} vivincy**`
+    `🏆 **${winner.displayName}** kazandı! **${COIN} +${bet.toLocaleString("en-US")} vivincy**${(winA ? luckA : luckB) > 0 ? " 🍀" : ""}\n` +
+    `Kazanan yeni bakiye: **${COIN} ${newBal.toLocaleString("en-US")} vivincy**`
   );
 }
 
@@ -618,7 +624,7 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
   const choices = ["🪨 Taş", "📄 Kağıt", "✂️ Makas"];
   const msg = await m.reply(
     `🎮 **Taş-Kağıt-Makas**\n` +
-    `${m.author.displayName} vs ${target.displayName}${bet >= 10 ? ` — Bahis: **${bet.toLocaleString("en-US")} vivincy**` : ""}\n\n` +
+    `${m.author.displayName} vs ${target.displayName}${bet >= 10 ? ` — Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy**` : ""}\n\n` +
     `Her ikisi de seçim yapın: 🪨 = Taş, 📄 = Kağıt, ✂️ = Makas (20 sn)`
   );
   try { await msg.react("🪨"); await msg.react("📄"); await msg.react("✂️"); } catch { /**/ }
@@ -655,7 +661,7 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
       if (balLoser.coins >= bet) {
         await takeCoins(loser.id, bet);
         const newWin = await addCoins(winner.id, bet);
-        result += `\n**+${bet.toLocaleString("en-US")} vivincy** | Kazanan bakiye: **${newWin.toLocaleString("en-US")} vivincy**`;
+        result += `\n**${COIN} +${bet.toLocaleString("en-US")} vivincy** | Kazanan bakiye: **${COIN} ${newWin.toLocaleString("en-US")} vivincy**`;
       } else {
         result += "\n⚠️ Kaybeden yetersiz bakiye — para transferi yapılamadı.";
       }
@@ -979,6 +985,25 @@ export async function startBot(): Promise<void> {
 
     const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot+applications.commands`;
     logger.info({ inviteUrl }, "Davet URL:");
+
+    // ── Vivincy coin uygulama emojisi ────────────────────────────────────────
+    try {
+      const emojiName = "vivincy_coin";
+      const existingEmojis = await c.application!.emojis.fetch();
+      let emoji = existingEmojis.find((e) => e.name === emojiName);
+      if (!emoji) {
+        const assetPath = join(dirname(fileURLToPath(import.meta.url)), "../assets/vivincy_coin.png");
+        const attachment = readFileSync(assetPath);
+        const base64 = `data:image/png;base64,${attachment.toString("base64")}`;
+        emoji = await c.application!.emojis.create({ name: emojiName, attachment: base64 });
+        logger.info({ id: emoji.id }, "Vivincy coin emojisi oluşturuldu");
+      } else {
+        logger.info({ id: emoji.id }, "Vivincy coin emojisi mevcut");
+      }
+      COIN = `<:${emojiName}:${emoji.id}>`;
+    } catch (err) {
+      logger.warn({ err }, "Vivincy coin emojisi yüklenemedi, fallback kullanılıyor");
+    }
 
     // ── Bot durumu rotasyonu ──────────────────────────────────────────────────
     const updateStatus = () => {
