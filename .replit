@@ -63,3 +63,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 DISCORD_CLIENT_ID = "1484845151989010473"
+GEMINI_API_KEY = "AQ.Ab8RN6IfcGMpkdY17A48vo95JIcISH6c_aoRzSSuWBBAN_5oug"

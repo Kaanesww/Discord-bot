@@ -21,6 +21,7 @@ import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLe
 import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
 import { startMineGame, handleMineClick, mineGames } from "./mineGame";
 import { handleAiMessage, clearChannelHistory, getHistorySize } from "./aiChat";
+import { resolveCommand } from "./fuzzyCmd";
 import {
   setBotOwner, isOwner, isInMaintenance,
   addMaintenance, removeMaintenance, clearAllMaintenance,
@@ -1917,18 +1918,35 @@ export async function startBot(): Promise<void> {
     if (message.content.startsWith(prefix)) {
       const args = message.content.slice(prefix.length).trim().split(/\s+/);
       const cmd = args.shift()?.toLowerCase() ?? "";
-      const handler = prefixHandlers[cmd];
+      let handler = prefixHandlers[cmd];
+      let resolvedCmd = cmd;
+
+      // Komut bulunamadıysa akıllı eşleştirme dene
+      if (!handler && cmd.length >= 2) {
+        const match = await resolveCommand(cmd).catch(() => null);
+        if (match && prefixHandlers[match.cmd]) {
+          handler = prefixHandlers[match.cmd]!;
+          resolvedCmd = match.cmd;
+
+          // Kullanıcıya sessizce bildir (1 saniye sonra silinir)
+          const hint = await message.reply(
+            `💡 **\`${prefix}${cmd}\`** → **\`${prefix}${resolvedCmd}\`** olarak anladım!`
+          ).catch(() => null);
+          if (hint) setTimeout(() => hint.delete().catch(() => null), 5000);
+        }
+      }
+
       if (handler) {
         // Bakım modu kontrolü — bakım ve ai komutları her zaman çalışır, owner'a engel yok
         const bypassCmds = new Set(["bakım", "bakim", "bakimmod", "aimod", "aitemizle", "aigeçmiş"]);
-        if (isInMaintenance(cmd) && !isOwner(message.author.id) && !bypassCmds.has(cmd)) {
+        if (isInMaintenance(resolvedCmd) && !isOwner(message.author.id) && !bypassCmds.has(resolvedCmd)) {
           await message.reply(
-            `🔧 **\`${prefix}${cmd}\`** şu an bakımda, birazdan geri dönecek!\n` +
+            `🔧 **\`${prefix}${resolvedCmd}\`** şu an bakımda, birazdan geri dönecek!\n` +
             `Bakım listesi için: \`${prefix}bakım liste\``
           );
           return;
         }
-        await handler(message, args).catch((err) => logger.error({ err, cmd }, "Prefix hata"));
+        await handler(message, args).catch((err) => logger.error({ err, cmd: resolvedCmd }, "Prefix hata"));
         return;
       }
     }

@@ -16,8 +16,8 @@ if (!apiKey) throw new Error("GEMINI_API_KEY secret eksik!");
 
 const genAI = new GoogleGenAI({ apiKey });
 
-// gemini-2.0-flash-lite: ücretsiz tier'da 30 RPM (en geniş kota)
-const MODEL = "gemini-2.0-flash-lite";
+// gemini-3.1-flash-lite: test edildi, ücretsiz tier'da çalışıyor
+const MODEL = "gemini-3.1-flash-lite";
 
 // ── Sistem promptu ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Sen VBRI adlı bir Discord botusun. Vivincy adlı bir Discord sunucusunun botusun.
