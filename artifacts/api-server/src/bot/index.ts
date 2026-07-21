@@ -20,6 +20,7 @@ import { generateEconProfileCard } from "./econProfileCard";
 import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLeaderboardCard";
 import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
 import { startMineGame, handleMineClick, mineGames } from "./mineGame";
+import { handleAiMessage, clearChannelHistory, getHistorySize } from "./aiChat";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
 import {
   getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll,
@@ -1605,6 +1606,16 @@ const prefixHandlers: Record<string, PfxHandler> = {
   // Ekonomi Seviye
   ekono: (m) => pfxEkono(m), ekonomi: (m) => pfxEkono(m), econlevel: (m) => pfxEkono(m), elevel: (m) => pfxEkono(m),
   ekonlider: (m) => pfxEkonLider(m), elb: (m) => pfxEkonLider(m), econlb: (m) => pfxEkonLider(m),
+  // AI sohbet yönetimi
+  aitemizle: async (m) => {
+    clearChannelHistory(m.channelId);
+    await m.reply("🧹 Bu kanalın AI sohbet geçmişi sıfırlandı!");
+  },
+  aigeçmiş: async (m) => {
+    const size = getHistorySize(m.channelId);
+    await m.reply(`🤖 Bu kanalda **${size}** mesaj geçmişi var.`);
+  },
+
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
   mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
@@ -1808,6 +1819,20 @@ export async function startBot(): Promise<void> {
   // ── Mesaj XP + Guard + Prefix komutlar ───────────────────────────────────
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot || !message.guildId) return;
+
+    // ── Bot etiketlendiğinde AI sohbet ──────────────────────────────────────
+    const botId = client.user?.id;
+    const isMentioned =
+      botId &&
+      (message.content.includes(`<@${botId}>`) || message.content.includes(`<@!${botId}>`));
+
+    if (isMentioned) {
+      await handleAiMessage(message).catch((err) =>
+        logger.error({ err }, "AI sohbet hatası")
+      );
+      return; // Guard ve XP'yi atla — sadece AI yanıtı ver
+    }
+
     const prefix = await getPrefix(message.guildId).catch(() => "v!");
 
     if (message.content.startsWith(prefix)) {
