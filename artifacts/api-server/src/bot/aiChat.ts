@@ -16,8 +16,8 @@ if (!apiKey) throw new Error("GEMINI_API_KEY secret eksik!");
 
 const genAI = new GoogleGenAI({ apiKey });
 
-// Ücretsiz tier'da en geniş kotaya sahip model
-const MODEL = "gemini-1.5-flash";
+// gemini-2.0-flash-lite: ücretsiz tier'da 30 RPM (en geniş kota)
+const MODEL = "gemini-2.0-flash-lite";
 
 // ── Sistem promptu ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Sen VBRI adlı bir Discord botusun. Vivincy adlı bir Discord sunucusunun botusun.
@@ -52,27 +52,24 @@ interface ChatTurn {
 }
 
 const channelHistories = new Map<string, ChatTurn[]>();
-const MAX_HISTORY = 30;
+const MAX_HISTORY = 20; // kanal başına max mesaj (10 çift)
 
 // Kullanıcı başına cooldown
 const userCooldowns = new Map<string, number>();
-const COOLDOWN_MS = 8000; // 8 saniye — free tier için güvenli aralık
+const COOLDOWN_MS = 6000; // 6 saniye
 
-// Kanal başına işlem kilidi
+// Kanal işlem kilidi
 const processingChannels = new Set<string>();
 
-// Global istek kuyruğu — dakikada max 12 istek gönder (rate limit: 15 RPM)
-let requestsThisMinute = 0;
+// Dakikalık istek sayacı (30 RPM altında tut)
+let reqThisMinute = 0;
 let minuteResetAt = Date.now() + 60_000;
 
-function checkGlobalRateLimit(): boolean {
+function checkRateLimit(): boolean {
   const now = Date.now();
-  if (now > minuteResetAt) {
-    requestsThisMinute = 0;
-    minuteResetAt = now + 60_000;
-  }
-  if (requestsThisMinute >= 12) return false; // limit yaklaşıyor
-  requestsThisMinute++;
+  if (now > minuteResetAt) { reqThisMinute = 0; minuteResetAt = now + 60_000; }
+  if (reqThisMinute >= 25) return false; // 25/30 RPM — güvenli marj
+  reqThisMinute++;
   return true;
 }
 
@@ -84,24 +81,24 @@ function getHistory(channelId: string): ChatTurn[] {
 }
 
 function addToHistory(channelId: string, role: "user" | "model", text: string): void {
-  const history = getHistory(channelId);
-  history.push({ role, parts: [{ text }] });
-  while (history.length > MAX_HISTORY) history.splice(0, 2);
+  const hist = getHistory(channelId);
+  hist.push({ role, parts: [{ text }] });
+  while (hist.length > MAX_HISTORY) hist.splice(0, 2);
 }
 
 function splitMessage(text: string, maxLen = 1900): string[] {
   if (text.length <= maxLen) return [text];
   const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > 0) {
+  let rem = text;
+  while (rem.length > 0) {
     let cut = maxLen;
-    if (remaining.length > maxLen) {
-      const nl = remaining.lastIndexOf("\n", maxLen);
-      const sp = remaining.lastIndexOf(" ", maxLen);
+    if (rem.length > maxLen) {
+      const nl = rem.lastIndexOf("\n", maxLen);
+      const sp = rem.lastIndexOf(" ", maxLen);
       cut = nl > maxLen / 2 ? nl : sp > maxLen / 2 ? sp : maxLen;
     }
-    chunks.push(remaining.slice(0, cut).trim());
-    remaining = remaining.slice(cut).trim();
+    chunks.push(rem.slice(0, cut).trim());
+    rem = rem.slice(cut).trim();
   }
   return chunks;
 }
@@ -110,42 +107,44 @@ function cleanContent(content: string, botId: string): string {
   return content.replace(new RegExp(`<@!?${botId}>`, "g"), "").replace(/\s+/g, " ").trim();
 }
 
-/** Exponential backoff ile Gemini'ye istek at (max 3 deneme) */
-async function callGeminiWithRetry(history: ChatTurn[], userText: string): Promise<string> {
+/** generateContent ile tam geçmişi gönder — chats API'den daha kararlı */
+async function callGemini(history: ChatTurn[], userText: string): Promise<string> {
+  const contents = [
+    ...history,
+    { role: "user" as const, parts: [{ text: userText }] },
+  ];
+
   const maxRetries = 3;
-  let lastError: any;
+  let lastErr: any;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const chat = genAI.chats.create({
+      const response = await genAI.models.generateContent({
         model: MODEL,
-        history: history.length > 0 ? history : undefined,
+        contents,
         config: {
           systemInstruction: SYSTEM_PROMPT,
           maxOutputTokens: 8192,
           temperature: 0.85,
         },
       });
-
-      const result = await chat.sendMessage({ message: userText });
-      return result.text?.trim() ?? "Bir şey söyleyemedim, tekrar dene.";
+      return response.text?.trim() ?? "Bir şey söyleyemedim, tekrar dene.";
     } catch (err: any) {
-      lastError = err;
-      const isRateLimit =
+      lastErr = err;
+      const isRate =
         err?.message?.includes("RESOURCE_EXHAUSTED") ||
         err?.message?.includes("quota") ||
-        err?.message?.includes("429") ||
-        err?.status === 429;
+        err?.status === 429 ||
+        err?.message?.includes("429");
 
-      if (!isRateLimit) throw err; // Rate limit değilse direkt fırlat
+      if (!isRate) throw err;
 
-      // Backoff: 5s, 15s, 30s
       const waitMs = [5000, 15000, 30000][attempt] ?? 30000;
-      logger.warn({ attempt, waitMs }, "Gemini rate limit, bekleniyor…");
+      logger.warn({ attempt, waitMs }, "Gemini rate limit — bekleniyor");
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }
-  throw lastError;
+  throw lastErr;
 }
 
 // ── Ana fonksiyon ─────────────────────────────────────────────────────────────
@@ -160,18 +159,17 @@ export async function handleAiMessage(m: Message): Promise<void> {
     return;
   }
 
-  // Kullanıcı cooldown kontrolü
-  const lastUsed = userCooldowns.get(m.author.id) ?? 0;
+  // Cooldown
   const now = Date.now();
-  const remaining = COOLDOWN_MS - (now - lastUsed);
+  const remaining = COOLDOWN_MS - (now - (userCooldowns.get(m.author.id) ?? 0));
   if (remaining > 0) {
     await m.reply(`⏳ Biraz yavaş kanka, **${(remaining / 1000).toFixed(1)}sn** bekle.`).catch(() => null);
     return;
   }
   userCooldowns.set(m.author.id, now);
 
-  // Global rate limit kontrolü
-  if (!checkGlobalRateLimit()) {
+  // Global rate limit
+  if (!checkRateLimit()) {
     await m.reply("😮‍💨 Şu an çok meşgulüm, **1 dakika** sonra tekrar dene!").catch(() => null);
     return;
   }
@@ -182,12 +180,11 @@ export async function handleAiMessage(m: Message): Promise<void> {
     return;
   }
   processingChannels.add(m.channelId);
-
   await m.channel.sendTyping().catch(() => null);
 
   try {
     const history = getHistory(m.channelId);
-    const responseText = await callGeminiWithRetry(history, userText);
+    const responseText = await callGemini(history, userText);
 
     addToHistory(m.channelId, "user", userText);
     addToHistory(m.channelId, "model", responseText);
@@ -195,41 +192,33 @@ export async function handleAiMessage(m: Message): Promise<void> {
     const parts = splitMessage(responseText);
     let replied = false;
     for (const part of parts) {
-      if (!replied) {
-        await m.reply(part).catch(() => null);
-        replied = true;
-      } else {
-        await m.channel.send(part).catch(() => null);
-      }
+      if (!replied) { await m.reply(part).catch(() => null); replied = true; }
+      else { await m.channel.send(part).catch(() => null); }
     }
   } catch (err: any) {
     logger.error({ err }, "Gemini AI sohbet hatası");
 
-    let errMsg = "🤖 Bir şeyler ters gitti, biraz sonra tekrar dene.";
+    let msg = "🤖 Bir şeyler ters gitti, biraz sonra tekrar dene.";
     if (err?.message?.includes("API_KEY") || err?.message?.includes("API key")) {
-      errMsg = "⚙️ AI anahtarı geçersiz, yöneticiye haber ver.";
-    } else if (
-      err?.message?.includes("quota") ||
-      err?.message?.includes("RESOURCE_EXHAUSTED") ||
-      err?.status === 429
-    ) {
-      errMsg = "😮‍💨 Gemini API kotası doldu, birkaç dakika sonra tekrar dene. (Ücretsiz tier dakikada 15 istek sınırı var)";
+      msg = "⚙️ AI anahtarı geçersiz, yöneticiye haber ver.";
+    } else if (err?.message?.includes("RESOURCE_EXHAUSTED") || err?.status === 429) {
+      msg = "😮‍💨 API limiti doldu, birkaç dakika sonra dene.";
     } else if (err?.message?.includes("SAFETY")) {
-      errMsg = "🚫 Bu konuda sana yardımcı olamam.";
+      msg = "🚫 Bu konuda sana yardımcı olamam.";
+    } else if (err?.status === 404 || err?.message?.includes("NOT_FOUND")) {
+      msg = "⚙️ Model bulunamadı, yöneticiye haber ver.";
     }
 
-    await m.reply(errMsg).catch(() => null);
+    await m.reply(msg).catch(() => null);
   } finally {
     processingChannels.delete(m.channelId);
   }
 }
 
-/** Kanalın sohbet geçmişini sıfırla */
 export function clearChannelHistory(channelId: string): void {
   channelHistories.delete(channelId);
 }
 
-/** Kanal geçmiş boyutunu döndür */
 export function getHistorySize(channelId: string): number {
   return getHistory(channelId).length;
 }

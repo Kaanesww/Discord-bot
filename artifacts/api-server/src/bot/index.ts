@@ -21,6 +21,12 @@ import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLe
 import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
 import { startMineGame, handleMineClick, mineGames } from "./mineGame";
 import { handleAiMessage, clearChannelHistory, getHistorySize } from "./aiChat";
+import {
+  setBotOwner, isOwner, isInMaintenance,
+  addMaintenance, removeMaintenance, clearAllMaintenance,
+  getMaintenanceList, getBotOwner,
+} from "./maintenance";
+import { generateMaintenanceCard } from "./maintenanceCard";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
 import {
   getBalance, addCoins, takeCoins, claimDaily, getLuck, activatePray, luckRoll,
@@ -1616,6 +1622,67 @@ const prefixHandlers: Record<string, PfxHandler> = {
     await m.reply(`🤖 Bu kanalda **${size}** mesaj geçmişi var.`);
   },
 
+  // Bakım modu (sadece bot sahibi)
+  bakım: async (m, args) => {
+    if (!m.guildId) return;
+
+    // Herkes listeyi görebilir
+    const sub = args[0]?.toLowerCase();
+    if (!sub || sub === "liste" || sub === "list") {
+      await m.channel.sendTyping().catch(() => null);
+      const entries = getMaintenanceList();
+      let ownerName = "Bot Sahibi";
+      try {
+        const ownerId = getBotOwner();
+        if (ownerId) {
+          const u = await m.client.users.fetch(ownerId);
+          ownerName = u.displayName;
+        }
+      } catch { /**/ }
+      const buf = await generateMaintenanceCard({ entries, ownerName });
+      await m.reply({ files: [new AttachmentBuilder(buf, { name: "bakim.png" })] });
+      return;
+    }
+
+    // Geri kalan komutlar sadece bot sahibine açık
+    if (!isOwner(m.author.id)) {
+      await m.reply("❌ Bu komutu sadece **bot sahibi** kullanabilir.");
+      return;
+    }
+
+    if (sub === "kaldır" || sub === "kaldir" || sub === "aç" || sub === "ac") {
+      const cmd = args[1]?.toLowerCase();
+      if (!cmd) { await m.reply("❌ Kullanım: `bakım kaldır <komut>`"); return; }
+      const removed = removeMaintenance(cmd);
+      await m.reply(removed
+        ? `✅ **\`${cmd}\`** bakımdan çıkarıldı, tekrar kullanılabilir.`
+        : `⚠️ **\`${cmd}\`** zaten bakımda değildi.`
+      );
+      return;
+    }
+
+    if (sub === "hepsini" || sub === "hepsi" || sub === "temizle") {
+      clearAllMaintenance();
+      await m.reply("✅ Tüm bakım modları kaldırıldı!");
+      return;
+    }
+
+    // v!bakım <komut> [sebep...]
+    const cmd = sub;
+    const reason = args.slice(1).join(" ") || "Bakım çalışması yapılıyor";
+    addMaintenance(cmd, reason);
+    await m.reply(
+      `🔧 **\`${cmd}\`** bakıma alındı!\n` +
+      `📝 Sebep: *${reason}*\n` +
+      `Kaldırmak için: \`bakım kaldır ${cmd}\``
+    );
+  },
+  bakim: async (m, args) => {
+    // Türkçe karakter olmadan alias
+    const handler = prefixHandlers["bakım"];
+    if (handler) await handler(m, args);
+  },
+
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
   mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
@@ -1667,6 +1734,18 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
+
+    // Bot sahibini belirle (application owner)
+    try {
+      const app = await c.application!.fetch();
+      const owner = app.owner;
+      if (owner && "id" in owner) {
+        setBotOwner(owner.id);
+        logger.info({ ownerId: owner.id }, "Bot sahibi belirlendi");
+      }
+    } catch (err) {
+      logger.warn({ err }, "Bot sahibi belirlenemedi");
+    }
 
     const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot+applications.commands`;
     logger.info({ inviteUrl }, "Davet URL:");
@@ -1840,6 +1919,15 @@ export async function startBot(): Promise<void> {
       const cmd = args.shift()?.toLowerCase() ?? "";
       const handler = prefixHandlers[cmd];
       if (handler) {
+        // Bakım modu kontrolü — bakım ve ai komutları her zaman çalışır, owner'a engel yok
+        const bypassCmds = new Set(["bakım", "bakim", "bakimmod", "aimod", "aitemizle", "aigeçmiş"]);
+        if (isInMaintenance(cmd) && !isOwner(message.author.id) && !bypassCmds.has(cmd)) {
+          await message.reply(
+            `🔧 **\`${prefix}${cmd}\`** şu an bakımda, birazdan geri dönecek!\n` +
+            `Bakım listesi için: \`${prefix}bakım liste\``
+          );
+          return;
+        }
         await handler(message, args).catch((err) => logger.error({ err, cmd }, "Prefix hata"));
         return;
       }
