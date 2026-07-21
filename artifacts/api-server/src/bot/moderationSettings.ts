@@ -159,3 +159,55 @@ export async function canUseMod(
     reason: `❌ Bu komutu kullanmak için gerekli moderatör rolüne sahip değilsin.`,
   };
 }
+
+// ── Kademeli yetki sistemi (Yetkili / Üst Yetkili) ───────────────────────────
+
+export interface ModTierInfo {
+  modRoles: string[];
+  seniorModRoles: string[];
+  approvalChannelId: string | null;
+}
+
+export async function getModTierInfo(guildId: string): Promise<ModTierInfo> {
+  const s = await getModSettings(guildId);
+  const row = s as any;
+  return {
+    modRoles:          parseRoles(row?.modRoles       ?? "[]"),
+    seniorModRoles:    parseRoles(row?.seniorModRoles  ?? "[]"),
+    approvalChannelId: row?.approvalChannelId ?? null,
+  };
+}
+
+export async function setModRoles(guildId: string, roles: string[]): Promise<void> {
+  const val = JSON.stringify(roles);
+  await db
+    .insert(moderationSettingsTable)
+    .values({ guildId, modRoles: val, updatedAt: new Date() } as any)
+    .onConflictDoUpdate({ target: moderationSettingsTable.guildId, set: { modRoles: val, updatedAt: new Date() } as any });
+  invalidate(guildId);
+}
+
+export async function setSeniorModRoles(guildId: string, roles: string[]): Promise<void> {
+  const val = JSON.stringify(roles);
+  await db
+    .insert(moderationSettingsTable)
+    .values({ guildId, seniorModRoles: val, updatedAt: new Date() } as any)
+    .onConflictDoUpdate({ target: moderationSettingsTable.guildId, set: { seniorModRoles: val, updatedAt: new Date() } as any });
+  invalidate(guildId);
+}
+
+export async function setApprovalChannel(guildId: string, channelId: string | null): Promise<void> {
+  await db
+    .insert(moderationSettingsTable)
+    .values({ guildId, approvalChannelId: channelId, updatedAt: new Date() } as any)
+    .onConflictDoUpdate({ target: moderationSettingsTable.guildId, set: { approvalChannelId: channelId, updatedAt: new Date() } as any });
+  invalidate(guildId);
+}
+
+/** Üst Yetkili kontrolü — sunucu sahibi, bot sahibi veya seniorModRoles */
+export async function canApproveMod(member: GuildMember, guildId: string): Promise<boolean> {
+  if (isOwner(member.id)) return true;
+  if (member.guild.ownerId === member.id) return true;
+  const tier = await getModTierInfo(guildId);
+  return tier.seniorModRoles.some((r) => member.roles.cache.has(r));
+}

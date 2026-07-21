@@ -39,7 +39,9 @@ import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlayi
 import { isOwner } from "./ownerUtils";
 import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
-import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, type ModCommand } from "./moderationSettings";
+import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
+import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
+import { generateWarnCard } from "./warnCard";
 import { AuditLogEvent, type GuildMember } from "discord.js";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
@@ -214,11 +216,39 @@ async function sendModLog(m: Message, guildId: string, text: string): Promise<vo
 // MODERASYon
 async function pfxBan(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.member || !m.guildId) return;
-  const perm = await canUseMod(m.member, m.guildId, "ban");
-  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.users.first();
   if (!target) { await m.reply("❌ Kullanım: `ban @kullanici [sebep]`"); return; }
+  if (target.id === m.author.id) { await m.reply("❌ Kendini yasaklayamazsın!"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
+
+  const tierInfo = await getModTierInfo(m.guildId);
+  const isSeniorOrOwner = isOwner(m.author.id)
+    || m.guild.ownerId === m.author.id
+    || tierInfo.seniorModRoles.some((r) => m.member!.roles.cache.has(r));
+
+  if (!isSeniorOrOwner) {
+    const directPerm = await canUseMod(m.member, m.guildId, "ban");
+    if (!directPerm.ok) {
+      // Yetkili rolü var mı? → onay kanalına gönder
+      const isYetkili = tierInfo.modRoles.some((r) => m.member!.roles.cache.has(r));
+      if (!isYetkili) { await m.reply(directPerm.reason ?? "❌ Bu komutu kullanmak için yetkin yok."); return; }
+      if (!tierInfo.approvalChannelId) {
+        await m.reply("❌ Onay kanalı ayarlanmamış. Sunucu sahibi `modsetup onaykanal #kanal` ile ayarlasın."); return;
+      }
+      const req: PendingRequest = {
+        type: "ban", guildId: m.guildId,
+        targetUserId: target.id, targetTag: target.tag,
+        targetAvatar: target.displayAvatarURL({ extension: "png", size: 256 }),
+        requestorId: m.author.id, requestorTag: m.author.tag,
+        reason: sebep, requestChannelId: m.channelId, createdAt: Date.now(),
+      };
+      await sendApprovalRequest(m.client, tierInfo.approvalChannelId, req);
+      await m.reply(`📨 **Ban isteğin** onay kanalına gönderildi. Üst Yetkili onayını bekliyor.`);
+      return;
+    }
+  }
+
+  // Direkt yürüt
   try {
     await m.guild.bans.create(target.id, { reason: sebep });
     const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "ban", reason: sebep });
@@ -231,11 +261,37 @@ async function pfxBan(m: Message, args: string[]): Promise<void> {
 
 async function pfxKick(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.member || !m.guildId) return;
-  const perm = await canUseMod(m.member, m.guildId, "kick");
-  if (!perm.ok) { await m.reply(perm.reason!); return; }
   const target = m.mentions.members?.first();
   if (!target) { await m.reply("❌ Kullanım: `kick @kullanici [sebep]`"); return; }
+  if (target.id === m.author.id) { await m.reply("❌ Kendini atamazsın!"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
+
+  const tierInfo = await getModTierInfo(m.guildId);
+  const isSeniorOrOwner = isOwner(m.author.id)
+    || m.guild.ownerId === m.author.id
+    || tierInfo.seniorModRoles.some((r) => m.member!.roles.cache.has(r));
+
+  if (!isSeniorOrOwner) {
+    const directPerm = await canUseMod(m.member, m.guildId, "kick");
+    if (!directPerm.ok) {
+      const isYetkili = tierInfo.modRoles.some((r) => m.member!.roles.cache.has(r));
+      if (!isYetkili) { await m.reply(directPerm.reason ?? "❌ Bu komutu kullanmak için yetkin yok."); return; }
+      if (!tierInfo.approvalChannelId) {
+        await m.reply("❌ Onay kanalı ayarlanmamış. Sunucu sahibi `modsetup onaykanal #kanal` ile ayarlasın."); return;
+      }
+      const req: PendingRequest = {
+        type: "kick", guildId: m.guildId,
+        targetUserId: target.id, targetTag: target.user.tag,
+        targetAvatar: target.displayAvatarURL({ extension: "png", size: 256 }),
+        requestorId: m.author.id, requestorTag: m.author.tag,
+        reason: sebep, requestChannelId: m.channelId, createdAt: Date.now(),
+      };
+      await sendApprovalRequest(m.client, tierInfo.approvalChannelId, req);
+      await m.reply(`📨 **Kick isteğin** onay kanalına gönderildi. Üst Yetkili onayını bekliyor.`);
+      return;
+    }
+  }
+
   if (!target.kickable && !isOwner(m.author.id)) { await m.reply("❌ Bu kullanıcıyı atamıyorum. (Yetki hiyerarşisi)"); return; }
   try {
     await target.kick(sebep);
@@ -255,9 +311,40 @@ async function pfxWarn(m: Message, args: string[]): Promise<void> {
   if (!target) { await m.reply("❌ Kullanım: `warn @kullanici [sebep]`"); return; }
   const sebep = args.slice(1).join(" ") || "Sebep belirtilmedi";
   const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "warn", reason: sebep });
-  await m.reply(`⚠️ **${target.username}** uyarıldı. Sebep: ${sebep} | #${log.id}`);
+  const allWarns = (await getUserLogs(target.id, m.guildId)).filter((l) => l.action === "warn" && l.active);
+
+  // ── Uyarı kartı oluştur ─────────────────────────────────────────────────
+  let warnBuf: Buffer | null = null;
+  try {
+    warnBuf = await generateWarnCard({
+      username: target.displayName,
+      avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
+      moderatorName: m.author.displayName,
+      reason: sebep,
+      warnId: log.id,
+      totalWarns: allWarns.length,
+      guildName: m.guild?.name ?? "",
+    });
+  } catch { /**/ }
+
+  if (warnBuf) {
+    await m.reply({ files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })] });
+  } else {
+    await m.reply(`⚠️ **${target.username}** uyarıldı. Sebep: ${sebep} | #${log.id}`);
+  }
   await sendModLog(m, m.guildId, `⚠️ **Uyarı** | <@${target.id}> (${target.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
-  try { await target.send(`⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`); } catch { /**/ }
+
+  // ── DM — görsel ile ──────────────────────────────────────────────────────
+  try {
+    if (warnBuf) {
+      await target.send({
+        content: `⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\n**Sebep:** ${sebep} | **ID:** #${log.id}`,
+        files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
+      });
+    } else {
+      await target.send(`⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`);
+    }
+  } catch { /**/ }
 }
 
 async function pfxTimeout(m: Message, args: string[]): Promise<void> {
@@ -470,12 +557,83 @@ async function pfxModSetup(m: Message, args: string[]): Promise<void> {
     return;
   }
 
+  // ── modsetup yetkili ekle/kaldir @rol ────────────────────────────────────
+  if (sub === "yetkili") {
+    const action = args[1]?.toLowerCase();
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `modsetup yetkili ekle @rol` / `modsetup yetkili kaldir @rol`"); return; }
+    const tierInfo = await getModTierInfo(m.guildId);
+    let roles = [...tierInfo.modRoles];
+    if (action === "ekle" || action === "add") {
+      if (!roles.includes(role.id)) roles.push(role.id);
+      await setModRoles(m.guildId, roles);
+      await m.reply(
+        `✅ **${role.name}** rolü **Yetkili** olarak eklendi.\n` +
+        `Bu roldeki üyeler \`ban\`/\`kick\` komutunu kullanabilir — Üst Yetkili onayı gerekir.\n` +
+        `Toplam yetkili roller: ${roles.map((r) => `<@&${r}>`).join(", ")}`
+      );
+    } else if (action === "kaldir" || action === "kaldır" || action === "remove") {
+      roles = roles.filter((r) => r !== role.id);
+      await setModRoles(m.guildId, roles);
+      await m.reply(`✅ **${role.name}** rolü Yetkili listesinden kaldırıldı.`);
+    } else {
+      await m.reply("❌ Kullanım: `modsetup yetkili ekle @rol` / `modsetup yetkili kaldir @rol`");
+    }
+    return;
+  }
+
+  // ── modsetup üstyetkili ekle/kaldir @rol ──────────────────────────────────
+  if (sub === "üstyetkili" || sub === "ustyetkili" || sub === "senior" || sub === "üst") {
+    const action = args[1]?.toLowerCase();
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `modsetup üstyetkili ekle @rol` / `modsetup üstyetkili kaldir @rol`"); return; }
+    const tierInfo = await getModTierInfo(m.guildId);
+    let roles = [...tierInfo.seniorModRoles];
+    if (action === "ekle" || action === "add") {
+      if (!roles.includes(role.id)) roles.push(role.id);
+      await setSeniorModRoles(m.guildId, roles);
+      await m.reply(
+        `✅ **${role.name}** rolü **Üst Yetkili** olarak eklendi.\n` +
+        `Bu roldeki üyeler ban/kick isteklerini onaylayabilir ve doğrudan yürütebilir.\n` +
+        `Toplam üst yetkili roller: ${roles.map((r) => `<@&${r}>`).join(", ")}`
+      );
+    } else if (action === "kaldir" || action === "kaldır" || action === "remove") {
+      roles = roles.filter((r) => r !== role.id);
+      await setSeniorModRoles(m.guildId, roles);
+      await m.reply(`✅ **${role.name}** rolü Üst Yetkili listesinden kaldırıldı.`);
+    } else {
+      await m.reply("❌ Kullanım: `modsetup üstyetkili ekle @rol` / `modsetup üstyetkili kaldir @rol`");
+    }
+    return;
+  }
+
+  // ── modsetup onaykanal #kanal / kaldır ────────────────────────────────────
+  if (sub === "onaykanal" || sub === "onay" || sub === "approvalchannel") {
+    const action = args[1]?.toLowerCase();
+    if (action === "kaldir" || action === "kaldır" || action === "remove" || action === "sil") {
+      await setApprovalChannel(m.guildId, null);
+      await m.reply("✅ Onay kanalı kaldırıldı. Artık ban/kick istekleri gönderilmeyecek.");
+      return;
+    }
+    const ch = m.mentions.channels.first();
+    if (!ch) { await m.reply("❌ Kullanım: `modsetup onaykanal #kanal` / `modsetup onaykanal kaldir`"); return; }
+    await setApprovalChannel(m.guildId, ch.id);
+    await m.reply(
+      `✅ Ban/kick onay kanalı <#${ch.id}> olarak ayarlandı.\n` +
+      `Yetkili rolündeki üyeler ban/kick isteğinde bulunduğunda buraya bildirim gelecek.`
+    );
+    return;
+  }
+
   await m.reply(
     "❌ Geçersiz alt komut.\n" +
     "`modsetup aç` / `modsetup kapat` / `modsetup durum`\n" +
     "`modsetup log #kanal`\n" +
-    "`modsetup rol <komut> @rol`\n" +
-    "`modsetup rolkaldir <komut> @rol`"
+    "`modsetup rol <komut> @rol` / `modsetup rolkaldir <komut> @rol`\n" +
+    "**Kademeli yetki sistemi:**\n" +
+    "`modsetup yetkili ekle/kaldir @rol` — ban/kick onay ister\n" +
+    "`modsetup üstyetkili ekle/kaldir @rol` — istekleri onaylar\n" +
+    "`modsetup onaykanal #kanal` — onay mesajlarının gittiği kanal"
   );
 }
 
@@ -1829,6 +1987,14 @@ export async function startBot(): Promise<void> {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
     const { customId } = interaction;
+
+    // Moderasyon onay butonları
+    if (customId.startsWith("modapprove_") || customId.startsWith("modreject_")) {
+      await handleApprovalButton(interaction).catch((err) =>
+        logger.error({ err }, "Mod onay butonu hatası")
+      );
+      return;
+    }
 
     // Mine (mayın tarlası) butonları
     if (customId.startsWith("mine_")) {

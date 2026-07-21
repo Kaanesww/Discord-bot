@@ -20,9 +20,9 @@ function getApiKey(): string {
 
 // Model sıralaması — kota dolunca bir sonrakine geçer
 const MODELS = [
-  "gemini-2.0-flash-lite",
-  "gemini-1.5-flash-8b",
+  "gemini-2.0-flash",
   "gemini-1.5-flash",
+  "gemini-1.5-pro",
 ];
 const MODEL = MODELS[0]!;
 
