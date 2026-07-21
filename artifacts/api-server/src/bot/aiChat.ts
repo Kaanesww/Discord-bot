@@ -7,19 +7,24 @@
  * Eksik parametre varsa soru sorar; kullanıcı yanıt verince devam eder.
  */
 
-import { GoogleGenAI } from "@google/genai";
 import type { Message } from "discord.js";
 import { logger } from "../lib/logger";
 import { BOT_TOOL_DECLARATIONS, executeToolCall } from "./aiCommands";
 
 // ── İstemci ───────────────────────────────────────────────────────────────────
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) throw new Error("GEMINI_API_KEY secret eksik!");
+function getApiKey(): string {
+  const k = process.env.GEMINI_API_KEY;
+  if (!k) throw new Error("GEMINI_API_KEY secret eksik!");
+  return k;
+}
 
-const genAI = new GoogleGenAI({ apiKey });
-
-// Ücretsiz tier'da çalışan model
-const MODEL = "gemini-2.0-flash-lite";
+// Model sıralaması — kota dolunca bir sonrakine geçer
+const MODELS = [
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash-8b",
+  "gemini-1.5-flash",
+];
+const MODEL = MODELS[0]!;
 
 // ── Sistem Promptu ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Sen VBRI adlı bir Discord botusun. Vivincy adlı bir Discord sunucusunun botusun.
@@ -152,6 +157,8 @@ interface GeminiResult {
   functionCalls: Array<{ name: string; args: Record<string, unknown> }>;
 }
 
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+
 async function callGemini(
   history: ChatTurn[],
   userText: string,
@@ -166,53 +173,78 @@ async function callGemini(
   let lastErr: unknown;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Kota dolunca sıradaki modeli dene
+    const model = MODELS[Math.min(attempt, MODELS.length - 1)]!;
+
+    const body: Record<string, unknown> = {
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      generationConfig: { maxOutputTokens: 4096, temperature: 0.85 },
+    };
+
+    if (withTools) {
+      body["tools"] = [{ functionDeclarations: BOT_TOOL_DECLARATIONS }];
+      body["toolConfig"] = { functionCallingConfig: { mode: "AUTO" } };
+    }
+
     try {
-      const config: Record<string, unknown> = {
-        systemInstruction: SYSTEM_PROMPT,
-        maxOutputTokens: 4096,
-        temperature: 0.85,
+      const apiKey = getApiKey();
+      const res = await fetch(`${GEMINI_BASE}/${model}:generateContent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const json = (await res.json()) as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{
+              text?: string;
+              functionCall?: { name: string; args: unknown };
+            }>;
+          };
+        }>;
+        error?: { code: number; status: string; message: string };
       };
 
-      if (withTools) {
-        config["tools"] = [{ functionDeclarations: BOT_TOOL_DECLARATIONS }];
-        config["toolConfig"] = {
-          functionCallingConfig: { mode: "AUTO" },
-        };
+      if (!res.ok) {
+        const err = json.error;
+        const isQuota = res.status === 429 || err?.status === "RESOURCE_EXHAUSTED";
+        if (isQuota) {
+          const waitMs = [8_000, 20_000, 40_000][attempt] ?? 40_000;
+          logger.warn({ attempt, model, waitMs }, "Gemini kota doldu, bekleniyor");
+          await new Promise((r) => setTimeout(r, waitMs));
+          lastErr = Object.assign(new Error(err?.message ?? "RESOURCE_EXHAUSTED"), { status: 429 });
+          continue;
+        }
+        throw Object.assign(new Error(JSON.stringify(err)), { status: res.status });
       }
-
-      const response = await genAI.models.generateContent({
-        model: MODEL,
-        contents,
-        config,
-      });
 
       // Function calls
       const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-      const candidate = response.candidates?.[0];
-      if (candidate?.content?.parts) {
-        for (const part of candidate.content.parts) {
-          if ((part as { functionCall?: { name: string; args: unknown } }).functionCall) {
-            const fc = (part as { functionCall: { name: string; args: unknown } }).functionCall;
-            calls.push({ name: fc.name, args: (fc.args ?? {}) as Record<string, unknown> });
-          }
+      const parts = json.candidates?.[0]?.content?.parts ?? [];
+      for (const part of parts) {
+        if (part.functionCall) {
+          calls.push({
+            name: part.functionCall.name,
+            args: (part.functionCall.args ?? {}) as Record<string, unknown>,
+          });
         }
       }
 
-      const text = response.text?.trim() ?? null;
+      const text = parts.find((p) => p.text)?.text?.trim() ?? null;
       return { text, functionCalls: calls };
 
     } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      const isQuota = status === 429;
+      if (!isQuota) throw err;
       lastErr = err;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const isRate =
-        errMsg.includes("RESOURCE_EXHAUSTED") ||
-        errMsg.includes("quota") ||
-        (err as { status?: number }).status === 429 ||
-        errMsg.includes("429");
-
-      if (!isRate) throw err;
-      const waitMs = [5_000, 15_000, 30_000][attempt] ?? 30_000;
-      logger.warn({ attempt, waitMs }, "Gemini rate limit — bekleniyor");
+      const waitMs = [8_000, 20_000, 40_000][attempt] ?? 40_000;
+      logger.warn({ attempt, model, waitMs }, "Gemini kota doldu, bekleniyor");
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }
