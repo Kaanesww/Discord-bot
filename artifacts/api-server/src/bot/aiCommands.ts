@@ -5,7 +5,7 @@
  * Tüm yetki kontrolleri burada yapılır; AI izinleri atlayamaz.
  */
 
-import { ChannelType, TextChannel, type GuildMember, type Message } from "discord.js";
+import { AttachmentBuilder, ChannelType, TextChannel, type GuildMember, type Message } from "discord.js";
 import {
   canUseMod,
   addRoleForCmd,
@@ -15,9 +15,10 @@ import {
   getModSettings,
   type ModCommand,
 } from "./moderationSettings";
-import { logAction } from "./moderation";
+import { logAction, getUserLogs } from "./moderation";
 import { isOwner } from "./ownerUtils";
 import { setPrefix as setPrefixUtil } from "./guildSettings";
+import { generateWarnCard } from "./warnCard";
 import { logger } from "../lib/logger";
 
 // ── Gemini Araç Tanımları ─────────────────────────────────────────────────────
@@ -339,12 +340,45 @@ export async function executeToolCall(
         if (!userId) return "❌ Geçerli bir kullanıcı ID'si belirtilemedi.";
         const reason = String(params.reason ?? "Sebep belirtilmedi");
         const log = await logAction({ guildId, userId, moderatorId: message.author.id, action: "warn", reason });
+        const allWarns = (await getUserLogs(userId, guildId)).filter((l) => l.action === "warn" && l.active);
+
+        // ── Görsel kart üret ──────────────────────────────────────────────
+        let warnBuf: Buffer | null = null;
+        try {
+          const target = await message.client.users.fetch(userId);
+          warnBuf = await generateWarnCard({
+            username: target.displayName,
+            avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
+            moderatorName: message.author.displayName,
+            reason,
+            warnId: log.id,
+            totalWarns: allWarns.length,
+            guildName: message.guild.name,
+          });
+        } catch { /**/ }
+
+        // Kanala gönder
+        if (warnBuf) {
+          await message.channel.send({
+            files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
+          }).catch(() => null);
+        }
+
+        // Kullanıcıya DM
+        try {
+          const target = await message.client.users.fetch(userId);
+          if (warnBuf) {
+            await target.send({
+              content: `⚠️ **${message.guild.name}** sunucusunda uyarı aldın!\n**Sebep:** ${reason} | **ID:** #${log.id}`,
+              files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
+            });
+          } else {
+            await target.send(`⚠️ **${message.guild.name}** sunucusunda uyarı aldın!\nSebep: ${reason} | #${log.id}`);
+          }
+        } catch { /**/ }
+
         await sendModLog(message, guildId,
           `⚠️ **Uyarı (AI)** | <@${userId}> | Mod: <@${message.author.id}> | Sebep: ${reason} | #${log.id}`);
-        try {
-          const u = await message.client.users.fetch(userId);
-          await u.send(`⚠️ **${message.guild.name}** sunucusunda uyarı aldın!\nSebep: ${reason} | #${log.id}`);
-        } catch { /**/ }
         return `⚠️ <@${userId}> uyarıldı. Sebep: ${reason} | #${log.id}`;
       }
 

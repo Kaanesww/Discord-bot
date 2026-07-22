@@ -21,6 +21,7 @@ import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLe
 import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
 import { startMineGame, handleMineClick, mineGames } from "./mineGame";
 import { handleAiMessage, clearChannelHistory, getHistorySize } from "./aiChat";
+import { handleCodeMessage, getCodeChannelId, setCodeChannelId, clearCodeChannelId } from "./codeEngine";
 import { resolveCommand } from "./fuzzyCmd";
 import {
   setBotOwner, isOwner, isInMaintenance,
@@ -1842,6 +1843,49 @@ const prefixHandlers: Record<string, PfxHandler> = {
     if (handler) await handler(m, args);
   },
 
+  // Kod yazma kanalı (sadece bot sahibi)
+  kodkanal: async (m, args) => {
+    if (!isOwner(m.author.id)) {
+      await m.reply("❌ Bu komutu sadece **bot sahibi** kullanabilir."); return;
+    }
+    const sub = args[0]?.toLowerCase();
+
+    if (!sub || sub === "durum" || sub === "status") {
+      const id = await getCodeChannelId();
+      await m.reply(id
+        ? `🖥️ **Kod yazma kanalı:** <#${id}>\nDeğiştirmek için: \`kodkanal #yeni-kanal\`\nKaldırmak için: \`kodkanal kaldır\``
+        : "❌ Henüz bir kod yazma kanalı belirlenmemiş.\nKurmak için: \`kodkanal #kanal-adı\`"
+      ); return;
+    }
+
+    if (sub === "kaldır" || sub === "kaldir" || sub === "sil" || sub === "kapat") {
+      await clearCodeChannelId();
+      await m.reply("✅ Kod yazma kanalı kaldırıldı."); return;
+    }
+
+    // Kanal mention veya ID
+    const channelId = m.mentions.channels.first()?.id ?? (args[0]?.match(/\d{15,20}/)?.[0]);
+    if (!channelId) {
+      await m.reply(
+        "❌ Kullanım: `kodkanal #kanal` | `kodkanal kaldır` | `kodkanal durum`\n" +
+        "Örnek: `kodkanal #vbri-dev`"
+      ); return;
+    }
+    const ch = await m.guild?.channels.fetch(channelId).catch(() => null);
+    if (!ch || !ch.isTextBased()) {
+      await m.reply("❌ Geçerli bir metin kanalı belirt."); return;
+    }
+    await setCodeChannelId(channelId);
+    await m.reply(
+      `✅ **Kod yazma kanalı** <#${channelId}> olarak ayarlandı!\n\n` +
+      `📝 O kanalda ne istediğini Türkçe/İngilizce yaz:\n` +
+      `> "Her kullanıcıya günde bir kez v!maden komutu ekle, 50-200 coin kazansın"\n\n` +
+      `⚡ VBRİ kodu üretir, ✅ ile onaylarsan bota uygular.\n` +
+      `⚙️ Not: Gemini kotası doluysa biraz beklenmesi gerekebilir.`
+    );
+  },
+  codekanal: async (m, a) => { const h = prefixHandlers["kodkanal"]; if (h) await h(m, a); },
+
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
   mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
@@ -2077,6 +2121,19 @@ export async function startBot(): Promise<void> {
         logger.error({ err }, "AI sohbet hatası")
       );
       return; // Guard ve XP'yi atla — sadece AI yanıtı ver
+    }
+
+    // ── Kod yazma kanalı ────────────────────────────────────────────────────
+    const codeChannelId = await getCodeChannelId().catch(() => null);
+    if (codeChannelId && message.channelId === codeChannelId) {
+      if (!isOwner(message.author.id)) {
+        await message.reply("❌ Bu kanalı sadece **bot sahibi** kullanabilir.").catch(() => null);
+        return;
+      }
+      await handleCodeMessage(message, client).catch((err) =>
+        logger.error({ err }, "Kod motoru hatası")
+      );
+      return;
     }
 
     const prefix = await getPrefix(message.guildId).catch(() => "v!");

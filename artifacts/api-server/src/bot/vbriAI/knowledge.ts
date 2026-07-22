@@ -379,6 +379,21 @@ export const COMMANDS: CommandInfo[] = [
     example: "v!bakım müzik Güncelleme var",
     permission: "Bot sahibi",
   },
+  {
+    names: ["kodkanal", "codekanal", "kodchannel"],
+    category: "Yönetim",
+    description:
+      "Botun AI kod yazma kanalını ayarlar. Bu kanalda doğal dil ile istediğin bot özelliğini yazabilirsin; " +
+      "VBRİ Gemini ile Node.js kodu üretir, onaylarsan botuna ekler. " +
+      "Kaldırmak için 'kodkanal kaldır', mevcut kanalı görmek için 'kodkanal durum' kullan.",
+    usage: "v!kodkanal #kanal | v!kodkanal kaldır | v!kodkanal durum",
+    example: "v!kodkanal #vbri-dev",
+    permission: "Bot sahibi",
+    note:
+      "Kod yazma kanalı oluşturmak için: 1) Sunucunda özel bir kanal yarat (#vbri-dev gibi), " +
+      "2) v!kodkanal #vbri-dev yaz, 3) O kanalda istediğin özelliği Türkçe/İngilizce anlat. " +
+      "Gemini kotası doluysa biraz beklemek gerekebilir.",
+  },
 ];
 
 // ── Komut arama ────────────────────────────────────────────────────────────────

@@ -6,3 +6,4 @@ export * from "./moderationSettings";
 export * from "./economy";
 export * from "./guardSettings";
 export * from "./statChannels";
+export * from "./codeChannel";
