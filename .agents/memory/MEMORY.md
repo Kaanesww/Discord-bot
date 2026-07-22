@@ -1,0 +1,3 @@
+- [Proje bağlamı](project-context.md) — Tüm mimari, özellikler, kullanıcı tercihleri; her session başında oku
+- [Gemini API quirks](gemini-quirks.md) — AQ.* key formatı, fetch yaklaşımı, kota davranışı
+- [Bot komut mimarisi](bot-architecture.md) — index.ts yapısı, prefix handler pattern, yeni komut ekleme
