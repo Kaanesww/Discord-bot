@@ -1,4 +1,5 @@
 export * from "./levels";
+export * from "./vbriMemory";
 export * from "./guildSettings";
 export * from "./levelRoles";
 export * from "./moderationLogs";

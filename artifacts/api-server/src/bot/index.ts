@@ -21,6 +21,7 @@ import { generateEconLeaderboardCard, type EconLeaderboardEntry } from "./econLe
 import { generateGuardCard, type GuardModuleInfo } from "./guardCard";
 import { startMineGame, handleMineClick, mineGames } from "./mineGame";
 import { handleAiMessage, clearChannelHistory, getHistorySize } from "./aiChat";
+import { handleCodeChannel } from "./VBRIaimotor/index";
 import { resolveCommand } from "./fuzzyCmd";
 import {
   setBotOwner, isOwner, isInMaintenance,
@@ -2072,9 +2073,23 @@ export async function startBot(): Promise<void> {
       botId &&
       (message.content.includes(`<@${botId}>`) || message.content.includes(`<@!${botId}>`));
 
+    // ── VBRİ code kanalı — sadece bot/sunucu sahibi ────────────────────────
+    const chName = "name" in message.channel
+      ? (message.channel as { name?: string }).name?.toLowerCase() ?? ""
+      : "";
+    const isCodeCh =
+      (chName.includes("vbri") || chName.includes("vbr")) &&
+      (chName.includes("code") || chName.includes("kod"));
+    if (isCodeCh && (isOwner(message.author.id) || message.guild?.ownerId === message.author.id)) {
+      await handleCodeChannel(message).catch((err) =>
+        logger.error({ err }, "VBRIaimotor kod kanalı hatası")
+      );
+      return;
+    }
+
     if (isMentioned) {
       await handleAiMessage(message).catch((err) =>
-        logger.error({ err }, "AI sohbet hatası")
+        logger.error({ err }, "VBRIaimotor sohbet hatası")
       );
       return; // Guard ve XP'yi atla — sadece AI yanıtı ver
     }
