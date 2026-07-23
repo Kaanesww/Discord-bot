@@ -15,7 +15,7 @@ A Turkish-language Discord bot system with a web dashboard. Features XP-based le
 
 - pnpm workspaces, Node.js 20, TypeScript 5.9
 - **Bot/API**: Express 5, Discord.js 14, @napi-rs/canvas (image cards)
-- **DB**: PostgreSQL (Replit built-in) + Drizzle ORM
+- **DB**: SQLite (local file at `data/bot.db`) + Drizzle ORM (libsql/turso dialect)
 - **Dashboard**: React 19, Vite, Tailwind CSS 4, Shadcn UI
 - **Validation**: Zod, drizzle-zod
 - **API codegen**: Orval (from OpenAPI spec)
@@ -32,9 +32,10 @@ A Turkish-language Discord bot system with a web dashboard. Features XP-based le
 
 ## Required env
 
-- `DISCORD_TOKEN` — bot token (saved as Replit Secret)
-- `DISCORD_CLIENT_ID` — app ID (saved as Replit Secret)
-- `DATABASE_URL` — auto-provided by Replit's built-in PostgreSQL
+- `DISCORD_TOKEN` — bot token
+- `DISCORD_CLIENT_ID` — Discord application ID
+- `GEMINI_API_KEY` — Google Gemini API key (used for AI chat features)
+- No database URL needed — DB is a local SQLite file (`data/bot.db`)
 
 ## Bot invite URL
 
