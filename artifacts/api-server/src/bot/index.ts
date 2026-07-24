@@ -37,7 +37,8 @@ import {
   type EconXpResult,
 } from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying, warmupMusic } from "./music";
-import { isOwner } from "./ownerUtils";
+import { resumeActiveGiveaways, createGiveaway, getChannelGiveaway, addParticipant, endGiveaway, cancelGiveaway, getActiveGiveaways, setMessageId, startGiveawayTimers } from "./giveaway";
+import { generateGiveawayCard } from "./giveawayCard";
 import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
@@ -1410,24 +1411,23 @@ async function pfxPing(m: Message): Promise<void> {
 }
 
 function buildHelpButtons(): ActionRowBuilder<ButtonBuilder>[] {
-  // 6 kategori → 2 sıra: 3 + 3
-  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    HELP_CATEGORIES.slice(0, 3).map((cat) =>
-      new ButtonBuilder()
-        .setCustomId(`help_cat_${cat.key}`)
-        .setLabel(`${cat.icon} ${cat.label}`)
-        .setStyle(ButtonStyle.Secondary)
-    )
-  );
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    HELP_CATEGORIES.slice(3).map((cat) =>
-      new ButtonBuilder()
-        .setCustomId(`help_cat_${cat.key}`)
-        .setLabel(`${cat.icon} ${cat.label}`)
-        .setStyle(ButtonStyle.Secondary)
-    )
-  );
-  return [row1, row2];
+  // Kategorileri 5'erli gruplara böl (Discord'un satır başına 5 buton limiti)
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < HELP_CATEGORIES.length; i += 5) {
+    const chunk = HELP_CATEGORIES.slice(i, i + 5);
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        chunk.map((cat) =>
+          new ButtonBuilder()
+            .setCustomId(`help_cat_${cat.key}`)
+            .setLabel(`${cat.icon} ${cat.label}`)
+            .setStyle(ButtonStyle.Secondary)
+        )
+      )
+    );
+  }
+  // Discord maksimum 5 satır — fazlasını kes
+  return rows.slice(0, 5);
 }
 
 async function pfxYardim(m: Message, args: string[]): Promise<void> {
@@ -1699,6 +1699,132 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
   );
 }
 
+// ── ÇEKİLİŞ ──────────────────────────────────────────────────────────────────
+
+async function pfxCekilis(m: Message, args: string[]): Promise<void> {
+  if (!m.guildId || !m.guild) return;
+  const sub = args[0]?.toLowerCase();
+
+  // ── v!çekiliş başlat <süre> <ödül...> ────────────────────────────────────
+  if (sub === "başlat" || sub === "baslat" || sub === "start") {
+    if (!isOwner(m.author.id) && !m.member?.permissions.has("ManageGuild")) {
+      await m.reply("❌ Çekiliş başlatmak için **Sunucuyu Yönet** yetkisine ihtiyacın var."); return;
+    }
+    const durationStr = args[1];
+    if (!durationStr) { await m.reply("❌ Kullanım: `çekiliş başlat <süre> <ödül>`\nÖrn: `çekiliş başlat 1sa PlayStation 5`"); return; }
+    const ms = parseDuration(durationStr);
+    if (!ms || ms < 30_000 || ms > 30 * 24 * 60 * 60 * 1000) {
+      await m.reply("❌ Geçersiz süre. Min: 30sn, Maks: 30g. Örn: `10m`, `1sa`, `2g`"); return;
+    }
+    const prize = args.slice(2).join(" ").trim();
+    if (!prize) { await m.reply("❌ Ödül belirtmelisin. Örn: `çekiliş başlat 1sa PlayStation 5`"); return; }
+
+    const endsAt = new Date(Date.now() + ms);
+    const giveaway = await createGiveaway({ guildId: m.guildId, channelId: m.channelId, hostId: m.author.id, prize, endsAt });
+
+    const buf = await generateGiveawayCard({ prize, hostName: m.author.displayName, participantCount: 0, endsAt, active: true });
+    const sent = await m.channel.send({ files: [new AttachmentBuilder(buf, { name: "cekilis.png" })] });
+    await setMessageId(giveaway.id, sent.id);
+
+    // Güncellenen giveaway'i oluştur
+    const updatedGw = { ...giveaway, messageId: sent.id };
+    startGiveawayTimers(updatedGw, m.client, m.author.displayName);
+
+    await m.reply(`✅ Çekiliş **#${giveaway.id}** başlatıldı! Katılmak için: \`çekiliş katıl\``);
+    return;
+  }
+
+  // ── v!çekiliş katıl ───────────────────────────────────────────────────────
+  if (sub === "katıl" || sub === "katil" || sub === "join") {
+    const gw = await getChannelGiveaway(m.channelId);
+    if (!gw) { await m.reply("❌ Bu kanalda aktif bir çekiliş yok."); return; }
+    if (m.author.id === gw.hostId) { await m.reply("❌ Kendi çekilişine katılamazsın!"); return; }
+
+    const result = await addParticipant(gw.id, m.author.id);
+    if (!result.joined) {
+      await m.reply(`⚠️ **${m.author.displayName}**, zaten bu çekilişe katıldın! (${result.count} katılımcı)`);
+    } else {
+      await m.reply(`🎉 **${m.author.displayName}** çekilişe katıldı! Toplam katılımcı: **${result.count}**`);
+    }
+    return;
+  }
+
+  // ── v!çekiliş bitir [ID] ──────────────────────────────────────────────────
+  if (sub === "bitir" || sub === "end" || sub === "finish") {
+    if (!isOwner(m.author.id) && !m.member?.permissions.has("ManageGuild")) {
+      await m.reply("❌ Çekilişi bitirmek için **Sunucuyu Yönet** yetkisine ihtiyacın var."); return;
+    }
+    let gw = args[1] ? await getChannelGiveaway(m.channelId) : await getChannelGiveaway(m.channelId);
+    if (!gw) { await m.reply("❌ Bu kanalda aktif bir çekiliş yok."); return; }
+
+    await m.reply(`⏳ Çekiliş **#${gw.id}** sonlandırılıyor...`);
+    const { winnerName } = await endGiveaway(gw.id, m.client);
+    if (!winnerName) { await m.channel.send(`😔 Çekiliş bitti ama katılımcı yoktu.`); }
+    return;
+  }
+
+  // ── v!çekiliş iptal [ID] ──────────────────────────────────────────────────
+  if (sub === "iptal" || sub === "cancel") {
+    if (!isOwner(m.author.id) && !m.member?.permissions.has("ManageGuild")) {
+      await m.reply("❌ Çekilişi iptal etmek için **Sunucuyu Yönet** yetkisine ihtiyacın var."); return;
+    }
+    const gw = await getChannelGiveaway(m.channelId);
+    if (!gw) { await m.reply("❌ Bu kanalda aktif bir çekiliş yok."); return; }
+
+    await cancelGiveaway(gw.id);
+    // Mesajı güncelle
+    if (gw.messageId) {
+      try {
+        const msg = await m.channel.messages.fetch(gw.messageId);
+        const participants: string[] = JSON.parse(gw.participants);
+        const hostUser = await m.client.users.fetch(gw.hostId).catch(() => null);
+        const buf = await generateGiveawayCard({
+          prize: gw.prize, hostName: hostUser?.displayName ?? "?",
+          participantCount: participants.length, endsAt: gw.endsAt, active: false,
+        });
+        await msg.edit({ files: [new AttachmentBuilder(buf, { name: "cekilis.png" })] });
+      } catch { /**/ }
+    }
+    await m.reply(`❌ Çekiliş **#${gw.id}** (${gw.prize}) iptal edildi.`);
+    return;
+  }
+
+  // ── v!çekiliş liste ───────────────────────────────────────────────────────
+  if (sub === "liste" || sub === "list") {
+    const list = await getActiveGiveaways(m.guildId);
+    if (!list.length) { await m.reply("📋 Şu an bu sunucuda aktif çekiliş yok."); return; }
+    const lines = list.map((gw) => {
+      const participants: string[] = JSON.parse(gw.participants);
+      const remaining = Math.max(0, Math.ceil((gw.endsAt.getTime() - Date.now()) / 1000));
+      const h = Math.floor(remaining / 3600); const mn = Math.floor((remaining % 3600) / 60);
+      const timeStr = remaining === 0 ? "Bitiyor" : (h > 0 ? `${h}sa ${mn}dk` : `${mn}dk`);
+      return `**#${gw.id}** 🎁 **${gw.prize}** — ${participants.length} katılımcı — ${timeStr} kaldı`;
+    });
+    await m.reply(`🎁 **Aktif Çekilişler (${list.length}):**\n${lines.join("\n")}`);
+    return;
+  }
+
+  // ── v!çekiliş tekrar <ID> ─────────────────────────────────────────────────
+  if (sub === "tekrar" || sub === "reroll") {
+    if (!isOwner(m.author.id) && !m.member?.permissions.has("ManageGuild")) {
+      await m.reply("❌ Bu komutu kullanmak için **Sunucuyu Yönet** yetkisine ihtiyacın var."); return;
+    }
+    await m.reply("❌ Tekrar çekim için önce çekilişi bitir (`çekiliş bitir`) sonra tekrar yazabilirsin.");
+    return;
+  }
+
+  // ── Yardım ───────────────────────────────────────────────────────────────
+  await m.reply(
+    "🎁 **Çekiliş Komutları:**\n" +
+    "`çekiliş başlat <süre> <ödül>` — Yeni çekiliş başlat (30sn–30g)\n" +
+    "`çekiliş katıl` — Bu kanaldaki çekilişe katıl\n" +
+    "`çekiliş bitir` — Çekilişi şimdi bitir (Yönetici)\n" +
+    "`çekiliş iptal` — Çekilişi iptal et (Yönetici)\n" +
+    "`çekiliş liste` — Sunucudaki aktif çekilişleri listele\n\n" +
+    "**Süre formatı:** `30sn`, `10m`, `1sa`, `2g`"
+  );
+}
+
 // ── LEVEL TOGGLE ──────────────────────────────────────────────────────────────
 
 async function pfxLevelToggle(m: Message, args: string[]): Promise<void> {
@@ -1863,6 +1989,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   userinfo: (m) => pfxUserinfo(m), kullanicibilgi: (m) => pfxUserinfo(m), uinfo: (m) => pfxUserinfo(m),
   ping: (m) => pfxPing(m),
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
+  // Çekiliş
+  "çekiliş": pfxCekilis, cekilis: pfxCekilis, giveaway: pfxCekilis, cekilish: pfxCekilis,
   // Guard
   guard: pfxGuard, koruma: pfxGuard,
   // Moderasyon ayarları
@@ -1949,6 +2077,9 @@ export async function startBot(): Promise<void> {
 
     // ── Müzik sistemi ön ısınma (ilk çal komutunu hızlandırır) ───────────────
     warmupMusic().catch(() => null);
+
+    // ── Aktif çekilişleri yeniden başlat ─────────────────────────────────────
+    resumeActiveGiveaways(c).catch(() => null);
   });
 
   // ── Ses XP ───────────────────────────────────────────────────────────────

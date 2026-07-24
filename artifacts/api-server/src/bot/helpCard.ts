@@ -149,6 +149,18 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "stat kaldir",             desc: "Stat kanallarını kaldır" },
     ],
   },
+  {
+    key: "cekilis", label: "Çekiliş", icon: "🎁",
+    color: "#ffd700", gradient: ["#ffd70033", "#ffd70011"],
+    commands: [
+      { name: "çekiliş başlat <süre> <ödül>", desc: "Çekiliş başlatır (10m/1sa/1g)" },
+      { name: "çekiliş katıl",                desc: "Bu kanaldaki çekilişe katıl" },
+      { name: "çekiliş bitir [ID]",           desc: "Çekilişi anında bitirir (Admin)" },
+      { name: "çekiliş iptal [ID]",           desc: "Çekilişi iptal eder (Admin)" },
+      { name: "çekiliş liste",                desc: "Sunucudaki aktif çekilişler" },
+      { name: "çekiliş tekrar <ID>",          desc: "Kazananı yeniden çeker (Admin)" },
+    ],
+  },
 ];
 
 // ── Yardımcı çizim fonksiyonları ──────────────────────────────────────────────

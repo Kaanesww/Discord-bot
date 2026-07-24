@@ -27,7 +27,9 @@ A Turkish-language Discord bot system with a web dashboard. Features XP-based le
 - `artifacts/api-server/src/bot/commands/` — individual command files
 - `artifacts/api-server/src/routes/` — Express API routes
 - `artifacts/bot-dashboard/src/` — React dashboard frontend
-- `lib/db/src/schema/` — Drizzle ORM schema (economy, guilds, levels, moderation, levelRoles)
+- `lib/db/src/schema/` — Drizzle ORM schema (economy, guilds, levels, moderation, levelRoles, giveaways)
+- `artifacts/api-server/src/bot/giveaway.ts` — çekiliş sistemi (DB + zamanlayıcı + otomatik bitiş)
+- `artifacts/api-server/src/bot/giveawayCard.ts` — çekiliş canvas görseli (her 30sn yenilenir)
 - `lib/api-spec/` — OpenAPI spec (source of truth for API contracts)
 
 ## Required env
@@ -46,7 +48,7 @@ Logged in the API server console on startup (check workflow logs).
 - Bot runs inside the same process as the Express API server (`artifacts/api-server/src/index.ts`)
 - All canvas image generation uses `@napi-rs/canvas` (not browser Canvas API)
 - Prefix is per-guild, stored in `guildSettings` table; default is `v!`
-- Currently uses slash commands registered globally via Discord REST API on startup
+- **Only prefix commands** — no slash commands. Default prefix `v!` (per-guild via `setprefix`)
 
 ## User preferences
 
@@ -58,7 +60,7 @@ Logged in the API server console on startup (check workflow logs).
 
 - The API server builds via esbuild before starting (`pnpm run build` inside the dev script) — first startup is slow (~1-2s)
 - `PORT` env var must be set; the managed workflow injects it automatically (8080 for API, 3000 for dashboard)
-- After any Discord intent or command change, the bot must be restarted for it to re-register slash commands
+- After any command change, restart the `artifacts/api-server: API Server` workflow
 
 ## Pointers
 
