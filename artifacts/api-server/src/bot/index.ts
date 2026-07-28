@@ -139,33 +139,43 @@ function handValue(hand: Card[]): number {
 // LEVEL / PROFIL
 async function pfxLevel(m: Message): Promise<void> {
   if (!m.guildId) return;
-  const target = m.mentions.users.first() ?? m.author;
-  const ud = await getUserLevel(target.id, m.guildId);
-  const rank = await getRank(target.id, m.guildId);
-  const { current, needed } = xpToNextLevel(ud.xp, ud.level);
-  const bal = await getBalance(target.id).catch(() => ({ coins: 0 }));
-  const buf = await generateProfileCard({
-    username: target.displayName,
-    avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
-    level: ud.level, xp: current, xpNeeded: needed, rank,
-    messageCount: ud.messageCount, coins: bal.coins,
-  });
-  await m.reply({ files: [new AttachmentBuilder(buf, { name: "level.png" })] });
+  try {
+    const target = m.mentions.users.first() ?? m.author;
+    const ud = await getUserLevel(target.id, m.guildId);
+    const rank = await getRank(target.id, m.guildId);
+    const { current, needed } = xpToNextLevel(ud.xp, ud.level);
+    const bal = await getBalance(target.id).catch(() => ({ coins: 0 }));
+    const buf = await generateProfileCard({
+      username: target.displayName,
+      avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
+      level: ud.level, xp: current, xpNeeded: needed, rank,
+      messageCount: ud.messageCount, coins: bal.coins,
+    });
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "level.png" })] });
+  } catch (err: any) {
+    logger.error({ err }, "pfxLevel hata");
+    await m.reply(`❌ Profil kartı oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
+  }
 }
 
 // LEADERBOARD
 async function pfxLeaderboard(m: Message): Promise<void> {
   if (!m.guildId) return;
-  const top = await getLeaderboard(m.guildId, 10);
-  if (!top.length) { await m.reply("Henüz kimse mesaj atmamış! 🦗"); return; }
-  const entries: LeaderboardEntry[] = await Promise.all(top.map(async (e, i) => {
-    let username = "Kullanıcı"; let avatarUrl = "";
-    try { const u = await m.client.users.fetch(e.userId); username = u.displayName; avatarUrl = u.displayAvatarURL({ extension: "png", size: 64 }); } catch { /**/ }
-    const { current, needed } = xpToNextLevel(e.xp, e.level);
-    return { rank: i + 1, userId: e.userId, username, avatarUrl, level: e.level, xp: e.xp, xpCurrent: current, xpNeeded: needed };
-  }));
-  const buf = await generateLeaderboardCard(entries);
-  await m.reply({ files: [new AttachmentBuilder(buf, { name: "lb.png" })] });
+  try {
+    const top = await getLeaderboard(m.guildId, 10);
+    if (!top.length) { await m.reply("Henüz kimse mesaj atmamış! 🦗"); return; }
+    const entries: LeaderboardEntry[] = await Promise.all(top.map(async (e, i) => {
+      let username = "Kullanıcı"; let avatarUrl = "";
+      try { const u = await m.client.users.fetch(e.userId); username = u.displayName; avatarUrl = u.displayAvatarURL({ extension: "png", size: 64 }); } catch { /**/ }
+      const { current, needed } = xpToNextLevel(e.xp, e.level);
+      return { rank: i + 1, userId: e.userId, username, avatarUrl, level: e.level, xp: e.xp, xpCurrent: current, xpNeeded: needed };
+    }));
+    const buf = await generateLeaderboardCard(entries);
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "lb.png" })] });
+  } catch (err: any) {
+    logger.error({ err }, "pfxLeaderboard hata");
+    await m.reply(`❌ Liderboard oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
+  }
 }
 
 // LEVELROL
@@ -201,9 +211,14 @@ async function pfxSicil(m: Message): Promise<void> {
   if (!isOwner(m.author.id) && !m.member.permissions.has("ModerateMembers")) { await m.reply("❌ **Moderate Members** iznin yok."); return; }
   const target = m.mentions.users.first();
   if (!target) { await m.reply("❌ Kullanım: `sicil @kullanici`"); return; }
-  const logs = await getUserLogs(target.id, m.guildId);
-  const buf = await generateSicilCard({ username: target.displayName, avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }), logs });
-  await m.reply({ files: [new AttachmentBuilder(buf, { name: "sicil.png" })] });
+  try {
+    const logs = await getUserLogs(target.id, m.guildId);
+    const buf = await generateSicilCard({ username: target.displayName, avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }), logs });
+    await m.reply({ files: [new AttachmentBuilder(buf, { name: "sicil.png" })] });
+  } catch (err: any) {
+    logger.error({ err }, "pfxSicil hata");
+    await m.reply(`❌ Sicil kartı oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
+  }
 }
 
 // ── Mod log helper ─────────────────────────────────────────────────────────────
@@ -475,9 +490,10 @@ const MOD_CMD_LABELS: Record<ModCommand, string> = {
 
 async function pfxModSetup(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId) return;
-  // Sadece sunucu sahibi veya bot sahibi
-  if (!isOwner(m.author.id) && m.guild.ownerId !== m.author.id) {
-    await m.reply("❌ Bu komutu sadece **sunucu sahibi** kullanabilir."); return;
+  // Sunucu sahibi, bot sahibi veya Administrator yetkisine sahip kişiler
+  const isAdmin = m.member?.permissions.has("Administrator") ?? false;
+  if (!isOwner(m.author.id) && m.guild.ownerId !== m.author.id && !isAdmin) {
+    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine veya sunucu sahipliğine ihtiyacın var."); return;
   }
 
   const sub = args[0]?.toLowerCase();
@@ -1892,7 +1908,7 @@ async function pfxLevelToggle(m: Message, args: string[]): Promise<void> {
 const prefixHandlers: Record<string, PfxHandler> = {
   // Level / Profil / Toggle
   level: (m, a) => a[0] && ["aç","ac","kapat","off","on","enable","disable","durum","status"].includes(a[0].toLowerCase()) ? pfxLevelToggle(m, a) : pfxLevel(m),
-  lvl: (m) => pfxLevel(m), rank: (m) => pfxLevel(m),
+  lvl: (m) => pfxLevel(m), rank: (m) => pfxLevel(m), xp: (m) => pfxLevel(m),
   profil: (m) => pfxLevel(m), profile: (m) => pfxLevel(m),
   levelsistemi: pfxLevelToggle, leveltoggle: pfxLevelToggle,
   // Leaderboard
@@ -2286,7 +2302,10 @@ export async function startBot(): Promise<void> {
           );
           return;
         }
-        await handler(message, args).catch((err) => logger.error({ err, cmd: resolvedCmd }, "Prefix hata"));
+        await handler(message, args).catch(async (err) => {
+          logger.error({ err, cmd: resolvedCmd }, "Prefix hata");
+          await message.reply(`❌ **\`${prefix}${resolvedCmd}\`** çalıştırılırken hata oluştu: ${(err as any)?.message ?? "Bilinmeyen hata"}`).catch(() => null);
+        });
         return;
       }
     }
