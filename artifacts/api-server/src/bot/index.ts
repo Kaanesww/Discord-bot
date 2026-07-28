@@ -37,6 +37,7 @@ import {
   type EconXpResult,
 } from "./economy";
 import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlaying, warmupMusic } from "./music";
+import { generateMusicCard } from "./musicCard";
 import { resumeActiveGiveaways, createGiveaway, getChannelGiveaway, addParticipant, endGiveaway, cancelGiveaway, getActiveGiveaways, setMessageId, startGiveawayTimers } from "./giveaway";
 import { generateGiveawayCard } from "./giveawayCard";
 import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
@@ -1262,10 +1263,10 @@ async function pfxCal(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId) { await m.reply("❌ Bu komut sadece sunucularda çalışır."); return; }
   const voiceChannel = m.member?.voice.channel;
   if (!voiceChannel) { await m.reply("❌ Önce bir ses kanalına gir."); return; }
-  if (!args.length) { await m.reply("❌ Kullanım: `çal <şarkı adı>` (SoundCloud arama)"); return; }
+  if (!args.length) { await m.reply("❌ Kullanım: `çal <şarkı adı veya YouTube/SoundCloud URL>`"); return; }
 
   const query = args.join(" ");
-  const statusMsg = await m.reply(`🎵 **Aranıyor:** \`${query}\`...`);
+  const statusMsg = await m.reply(`🔍 **Aranıyor:** \`${query}\`...`);
 
   const { track, position, error } = await addToQueue(m.guildId, voiceChannel, m.channel, query, m.author.displayName);
 
@@ -1274,10 +1275,22 @@ async function pfxCal(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  if (position === 1) {
-    await statusMsg.edit(`▶️ **Çalınıyor:** [${track.title}](${track.url})\n⏱️ Süre: **${track.duration}**`);
+  // position === 1 → music.ts zaten "Çalınıyor" kartını gönderiyor
+  // position > 1 → kuyruğa eklendi kartı burada göster
+  if (position > 1) {
+    try {
+      const buf = await generateMusicCard(track, "queued", position);
+      await statusMsg.delete().catch(() => null);
+      await m.channel.send({
+        content: `➕ **Kuyruğa eklendi (#${position})**`,
+        files: [new AttachmentBuilder(buf, { name: "queued.png" })],
+      });
+    } catch {
+      await statusMsg.edit(`➕ **Kuyruğa eklendi (#${position}):** [${track.title}](${track.url}) — ${track.duration}`);
+    }
   } else {
-    await statusMsg.edit(`➕ **Kuyruğa eklendi (#${position}):** [${track.title}](${track.url})\n⏱️ Süre: **${track.duration}**`);
+    // İlk şarkı: kart music.ts içinden gönderildi, sadece ara mesajı sil
+    await statusMsg.delete().catch(() => null);
   }
 }
 
@@ -1299,11 +1312,18 @@ async function pfxKuyruk(m: Message): Promise<void> {
   if (!m.guildId) return;
   const queue = getQueue(m.guildId);
   if (!queue || queue.tracks.length === 0) { await m.reply("📭 Kuyruk boş."); return; }
+  const srcEmoji = (s?: string) => s === "youtube" ? "🔴" : s === "soundcloud" ? "🟠" : "🎵";
   const list = queue.tracks.slice(0, 10).map((t, i) =>
-    `${i === 0 ? "▶️" : `${i}.`} **${t.title}** [${t.duration}] — _${t.requestedBy}_`
+    `${i === 0 ? "▶️" : `\`${i}.\``} ${srcEmoji(t.source)} **${t.title}** \`[${t.duration}]\` — *${t.requestedBy}*`
   ).join("\n");
-  const more = queue.tracks.length > 10 ? `\n...ve **${queue.tracks.length - 10}** şarkı daha` : "";
-  await m.reply(`🎵 **Müzik Kuyruğu** (${queue.tracks.length} şarkı)\n${list}${more}`);
+  const more = queue.tracks.length > 10 ? `\n…ve **${queue.tracks.length - 10}** şarkı daha` : "";
+  const { EmbedBuilder } = await import("discord.js");
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`🎵 Müzik Kuyruğu — ${queue.tracks.length} şarkı`)
+    .setDescription(list + more)
+    .setFooter({ text: "🔴 YouTube · 🟠 SoundCloud" });
+  await m.reply({ embeds: [embed] });
 }
 
 async function pfxDurdur(m: Message): Promise<void> {
@@ -1316,7 +1336,15 @@ async function pfxSarki(m: Message): Promise<void> {
   if (!m.guildId) return;
   const track = getNowPlaying(m.guildId);
   if (!track) { await m.reply("❌ Şu an çalan bir şarkı yok."); return; }
-  await m.reply(`🎵 **Şu an çalıyor:**\n**${track.title}**\n⏱️ Süre: **${track.duration}** | İsteyen: **${track.requestedBy}**`);
+  try {
+    const buf = await generateMusicCard(track, "playing");
+    await m.reply({
+      content: `🎵 **Şu an çalıyor**`,
+      files: [new AttachmentBuilder(buf, { name: "nowplaying.png" })],
+    });
+  } catch {
+    await m.reply(`🎵 **Şu an çalıyor:**\n**${track.title}**\n⏱️ ${track.duration} | 👤 ${track.requestedBy}`);
+  }
 }
 
 // SUNUCU YÖNETİMİ
