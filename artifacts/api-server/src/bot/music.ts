@@ -1,10 +1,16 @@
 /**
- * Müzik sistemi v3
- * Akış önceliği: play-dl (YouTube/SoundCloud) → ytdl-core fallback
- * Bağlantı: otomatik yeniden bağlanma, 5 deneme
+ * Müzik sistemi v4
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Replit ortamında YouTube IP engeli nedeniyle:
+ *   - Metadata (başlık, süre, thumbnail): YouTube arama / SC arama
+ *   - Streaming (ses): HER ZAMAN SoundCloud üzerinden
+ *
+ * Akış:
+ *  1. Sorgu çözümlenir → Track metadata (başlık vb.)
+ *  2. Stream açılır   → SoundCloud'da başlık araması → play-dl stream
  */
+
 import play from "play-dl";
-import ytdl from "@distube/ytdl-core";
 import {
   joinVoiceChannel,
   createAudioPlayer,
@@ -31,6 +37,8 @@ export interface Track {
   requestedBy: string;
   source?: "youtube" | "soundcloud" | "unknown";
   artist?: string;
+  /** SoundCloud stream URL'i — her zaman dolu olacak */
+  scUrl?: string;
 }
 
 interface GuildQueue {
@@ -54,7 +62,7 @@ async function ensureSoundCloud(): Promise<void> {
   scInitPromise = (async () => {
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        if (attempt > 1) await sleep((attempt) * 1200);
+        if (attempt > 1) await sleep(attempt * 1200);
         const clientId = await play.getFreeClientID();
         if (!clientId) throw new Error("Boş client_id");
         await play.setToken({ soundcloud: { client_id: clientId } });
@@ -63,8 +71,8 @@ async function ensureSoundCloud(): Promise<void> {
         logger.info({ attempt }, "SoundCloud istemci kimliği alındı");
         return;
       } catch (err) {
-        logger.warn({ err, attempt }, "SoundCloud başlatma denemesi başarısız");
-        if (attempt === 5) { scInitPromise = null; throw new Error("SoundCloud bağlantısı kurulamadı"); }
+        logger.warn({ err, attempt }, "SoundCloud başlatma başarısız");
+        if (attempt === 5) { scInitPromise = null; throw new Error("SoundCloud bağlanamadı"); }
       }
     }
   })();
@@ -79,55 +87,86 @@ export async function warmupMusic(): Promise<void> {
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
-function formatDuration(sec: number): string {
+function fmt(sec: number): string {
   if (!sec || sec <= 0) return "?:??";
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function isYouTubeUrl(q: string): boolean {
   return /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)/.test(q);
 }
-
 function isSoundCloudUrl(q: string): boolean {
-  return q.startsWith("https://soundcloud.com/") || q.startsWith("http://soundcloud.com/");
+  return /^https?:\/\/(www\.)?soundcloud\.com\//.test(q);
+}
+function isSpotifyUrl(q: string): boolean {
+  return /^https?:\/\/open\.spotify\.com\/track\//.test(q);
 }
 
-function isSpotifyUrl(q: string): boolean {
-  return q.startsWith("https://open.spotify.com/track/") || q.startsWith("https://spotify.com/track/");
+// ── SoundCloud stream URL'i bul ───────────────────────────────────────────────
+// Her zaman SoundCloud üzerinden stream ettiğimiz için kritik fonksiyon.
+/** Birden fazla sorgu deneyerek ilk geçerli SoundCloud stream URL'ini döndürür */
+async function findScStreamUrl(...candidates: string[]): Promise<string> {
+  await ensureSoundCloud();
+
+  // Her adayı sıraya koy: orijinal + temizlenmiş versiyon
+  const queries: string[] = [];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    if (isSoundCloudUrl(raw)) return raw; // Direkt SC URL
+    queries.push(raw);
+    // Parantez/köşeli parantez temizlenmiş versiyon
+    const clean = raw
+      .replace(/\(official[^)]*\)/gi, "")
+      .replace(/\[.*?\]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    if (clean && clean !== raw) queries.push(clean);
+  }
+
+  // Dedupe
+  const seen = new Set<string>();
+  const unique = queries.filter((q) => { if (seen.has(q)) return false; seen.add(q); return true; });
+
+  for (const q of unique) {
+    const results = await play.search(q, { source: { soundcloud: "tracks" }, limit: 5 });
+    if (results && results.length > 0) {
+      const sc = results[0] as any;
+      // sc.url = API URL (404 verir), sc.permalink = gerçek web URL
+      const url: string = sc.permalink ?? sc.url ?? "";
+      if (url) return url;
+    }
+  }
+
+  throw new Error(`SoundCloud'da bulunamadı: ${unique[0] ?? "?"}`);
 }
 
 // ── Track çözümleme ───────────────────────────────────────────────────────────
 
-async function resolveYouTube(query: string): Promise<Track> {
+async function resolveFromYouTube(query: string): Promise<Omit<Track, "requestedBy">> {
   if (isYouTubeUrl(query)) {
-    // URL → bilgileri al
     try {
       const info = await play.video_info(query);
       const v = info.video_details as any;
+      const title: string = v.title ?? "YouTube";
+      const artist: string = v.channel?.name ?? "";
+      // SC aramasında kanal adını kullanma — sadece başlıkla ara
+      const scUrl = await findScStreamUrl(title, query);
       return {
-        title: v.title ?? "YouTube",
+        title,
         url: query,
-        duration: formatDuration(v.durationInSec ?? 0),
+        duration: fmt(v.durationInSec ?? 0),
         thumbnail: v.thumbnails?.[0]?.url ?? "",
-        requestedBy: "",
         source: "youtube",
-        artist: v.channel?.name ?? "",
+        artist,
+        scUrl,
       };
     } catch {
-      const info = await ytdl.getInfo(query);
-      return {
-        title: info.videoDetails.title,
-        url: query,
-        duration: formatDuration(parseInt(info.videoDetails.lengthSeconds, 10)),
-        thumbnail: info.videoDetails.thumbnails?.[0]?.url ?? "",
-        requestedBy: "",
-        source: "youtube",
-        artist: info.videoDetails.author?.name ?? "",
-      };
+      // video_info başarısız → metin araması
     }
   }
 
@@ -135,131 +174,109 @@ async function resolveYouTube(query: string): Promise<Track> {
   const results = await play.search(query, { source: { youtube: "video" }, limit: 3 });
   if (!results || results.length === 0) throw new Error("YouTube'da sonuç bulunamadı");
   const best = results[0] as any;
-  const videoUrl = best.url ?? best.video_url ?? "";
+  const videoUrl: string = best.url ?? best.video_url ?? "";
   if (!videoUrl) throw new Error("YouTube URL alınamadı");
+  const title: string = best.title ?? query;
+  const artist: string = best.channel?.name ?? "";
+  // SC aramasında kanal adını KULLANMA — sadece başlıkla ara
+  const scUrl = await findScStreamUrl(title, query);
   return {
-    title: best.title ?? query,
+    title,
     url: videoUrl,
-    duration: formatDuration(best.durationInSec ?? 0),
+    duration: fmt(best.durationInSec ?? 0),
     thumbnail: best.thumbnails?.[0]?.url ?? best.thumbnail?.url ?? "",
-    requestedBy: "",
     source: "youtube",
-    artist: best.channel?.name ?? "",
+    artist,
+    scUrl,
   };
 }
 
-async function resolveSoundCloud(query: string): Promise<Track> {
+async function resolveFromSoundCloud(query: string): Promise<Omit<Track, "requestedBy">> {
   await ensureSoundCloud();
+
   if (isSoundCloudUrl(query)) {
     const sc = await play.soundcloud(query) as any;
+    // permalink = gerçek web URL, sc.url = API URL (404)
+    const streamUrl: string = sc.permalink ?? sc.url ?? query;
     return {
       title: sc.name ?? "Bilinmeyen",
-      url: sc.url ?? query,
-      duration: formatDuration(sc.durationInSec ?? 0),
+      url: streamUrl,
+      duration: fmt(sc.durationInSec ?? 0),
       thumbnail: sc.thumbnail ?? "",
-      requestedBy: "",
       source: "soundcloud",
       artist: sc.user?.username ?? "",
+      scUrl: streamUrl,
     };
   }
-  const results = await play.search(query, { source: { soundcloud: "tracks" }, limit: 3 });
+
+  const results = await play.search(query, { source: { soundcloud: "tracks" }, limit: 5 });
   if (!results || results.length === 0) throw new Error(`"${query}" SoundCloud'da bulunamadı`);
   const sc = results[0] as any;
+  const streamUrl: string = sc.permalink ?? sc.url ?? "";
   return {
     title: sc.name ?? "Bilinmeyen",
-    url: sc.url ?? "",
-    duration: formatDuration(sc.durationInSec ?? 0),
+    url: streamUrl,
+    duration: fmt(sc.durationInSec ?? 0),
     thumbnail: sc.thumbnail ?? "",
-    requestedBy: "",
     source: "soundcloud",
     artist: sc.user?.username ?? "",
+    scUrl: streamUrl,
   };
 }
 
-export async function resolveTrack(query: string): Promise<Track> {
+export async function resolveTrack(query: string): Promise<Omit<Track, "requestedBy">> {
+  // Spotify → sadece başlık bazlı SC araması (API yok)
   if (isSpotifyUrl(query)) {
-    // Spotify → başlıkla ara (API anahtarı olmadan)
-    try {
-      const url = new URL(query);
-      const parts = url.pathname.split("/").filter(Boolean);
-      query = parts[parts.length - 1] ?? query; // track ID → arama query olarak kullan
-    } catch { /* ignore */ }
+    const m = query.match(/track\/([A-Za-z0-9]+)/);
+    query = m?.[1] ?? query; // ID'yi arama terimi olarak kullan
+    return resolveFromSoundCloud(query);
   }
 
-  if (isSoundCloudUrl(query)) return resolveSoundCloud(query);
+  if (isSoundCloudUrl(query)) return resolveFromSoundCloud(query);
 
+  // YouTube URL → önce YouTube metadata dene
   if (isYouTubeUrl(query)) {
-    try { return await resolveYouTube(query); }
-    catch (ytErr: any) {
-      logger.warn({ err: ytErr }, "YouTube URL çözümlenemedi, SoundCloud'da aranıyor");
-      try {
-        const info = await ytdl.getInfo(query).catch(() => null);
-        return resolveSoundCloud(info?.videoDetails.title ?? query);
-      } catch { throw ytErr; }
-    }
+    try { return await resolveFromYouTube(query); } catch { /* SC'ye düş */ }
+    return resolveFromSoundCloud(query);
   }
 
-  // Metin → YouTube önce, SoundCloud fallback
-  try { return await resolveYouTube(query); }
-  catch (ytErr: any) {
+  // Metin araması → YouTube metadata önce (daha iyi thumbnail), SC fallback
+  try { return await resolveFromYouTube(query); } catch (ytErr: any) {
     logger.warn({ err: ytErr, query }, "YouTube arama başarısız, SoundCloud'a geçiliyor");
-    return resolveSoundCloud(query);
+    return resolveFromSoundCloud(query);
   }
 }
 
-// ── Ses akışı ─────────────────────────────────────────────────────────────────
+// ── Ses akışı: HER ZAMAN SoundCloud ─────────────────────────────────────────
 
 async function createStream(track: Track): Promise<{ stream: any; type: StreamType }> {
-  if (track.source === "youtube") {
-    // Önce play-dl ile dene (Replit ortamında daha güvenilir)
-    try {
-      const result = await play.stream(track.url, { quality: 2, discordPlayerCompatibility: true });
-      let dtype: StreamType;
-      switch (result.type) {
-        case "ogg/opus":  dtype = StreamType.OggOpus; break;
-        case "webm/opus": dtype = StreamType.WebmOpus; break;
-        default:          dtype = StreamType.Arbitrary;
-      }
-      return { stream: result.stream, type: dtype };
-    } catch (playdlErr: any) {
-      logger.warn({ err: playdlErr }, "play-dl YouTube stream başarısız, ytdl deneniyor");
-    }
-
-    // ytdl fallback
-    try {
-      const stream = ytdl(track.url, {
-        filter: "audioonly",
-        quality: "highestaudio",
-        highWaterMark: 1 << 25,
-        dlChunkSize: 0,
-        requestOptions: {
-          headers: {
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          },
-        },
-      });
-      return { stream, type: StreamType.Arbitrary };
-    } catch (ytdlErr: any) {
-      logger.warn({ err: ytdlErr }, "ytdl stream başarısız, SoundCloud fallback");
-      const scTrack = await resolveSoundCloud(track.title);
-      return createStream(scTrack);
-    }
-  }
-
-  // SoundCloud akışı — play-dl
   await ensureSoundCloud();
+
+  const scUrl = track.scUrl ?? track.url;
+  if (!scUrl) throw new Error("SoundCloud URL bulunamadı");
+
   let result: Awaited<ReturnType<typeof play.stream>>;
   try {
-    result = await play.stream(track.url, { quality: 2 });
+    result = await play.stream(scUrl, { quality: 2 });
   } catch (err: any) {
-    if (err?.message?.includes("401") || err?.message?.includes("403") || err?.message?.includes("client_id")) {
+    // Token süresi dolmuş olabilir — yenile
+    if (
+      err?.message?.includes("401") ||
+      err?.message?.includes("403") ||
+      err?.message?.includes("client_id") ||
+      err?.message?.includes("expired")
+    ) {
       scReady = false;
       await ensureSoundCloud();
-      result = await play.stream(track.url, { quality: 2 });
+      result = await play.stream(scUrl, { quality: 2 });
     } else {
-      throw err;
+      // URL geçersiz → title ile yeniden ara
+      logger.warn({ err, scUrl }, "SC stream başarısız, yeniden aranıyor");
+      const fallbackUrl = await findScStreamUrl(track.title);
+      result = await play.stream(fallbackUrl, { quality: 2 });
     }
   }
+
   let dtype: StreamType;
   switch (result.type) {
     case "ogg/opus":  dtype = StreamType.OggOpus; break;
@@ -288,8 +305,9 @@ async function playNext(guildId: string): Promise<void> {
     const { stream, type } = await createStream(track);
     const resource = createAudioResource(stream, { inputType: type, inlineVolume: false });
     queue.player.play(resource);
-    logger.info({ title: track.title, source: track.source, guildId }, "Müzik çalınıyor");
+    logger.info({ title: track.title, source: track.source, guildId }, "Müzik çalınıyor (SC stream)");
 
+    // Görsel kart
     try {
       const buf = await generateMusicCard(track, "playing");
       await queue.textChannel.send({
@@ -299,12 +317,13 @@ async function playNext(guildId: string): Promise<void> {
     } catch {
       queue.textChannel.send(`▶️ **Çalınıyor:** ${track.title} — ${track.duration}`).catch(() => null);
     }
-  } catch (err) {
-    logger.error({ err, title: track.title }, "Şarkı oynatılamadı, atlanıyor");
-    queue.textChannel.send(`❌ **${track.title}** oynatılamadı, atlanıyor...`).catch(() => null);
+  } catch (err: any) {
+    logger.error({ err, title: track.title }, "Şarkı oynatılamadı");
+    queue.textChannel.send(`❌ **${track.title}** oynatılamadı — ${err?.message ?? "bilinmeyen hata"}`).catch(() => null);
     queue.tracks.shift();
-    if (queue.tracks.length > 0) setTimeout(() => playNext(guildId).catch(() => null), 800);
-    else {
+    if (queue.tracks.length > 0) {
+      setTimeout(() => playNext(guildId).catch(() => null), 1000);
+    } else {
       getVoiceConnection(guildId)?.destroy();
       queues.delete(guildId);
     }
@@ -320,15 +339,17 @@ export async function addToQueue(
   query: string,
   requestedBy: string,
 ): Promise<{ track: Track | null; position: number; error?: string }> {
+  // 1. Track bilgisini çöz
   let trackInfo: Track;
   try {
     const resolved = await resolveTrack(query);
     trackInfo = { ...resolved, requestedBy };
   } catch (err: any) {
-    logger.error({ err }, "Şarkı bilgisi alınamadı");
+    logger.error({ err }, "Şarkı bulunamadı");
     return { track: null, position: 0, error: err?.message ?? "Şarkı bulunamadı" };
   }
 
+  // 2. Kuyruk / bağlantı hazırla
   let queue = queues.get(guildId);
 
   if (!queue) {
@@ -336,6 +357,7 @@ export async function addToQueue(
       behaviors: { noSubscriber: NoSubscriberBehavior.Play },
     });
 
+    // Mevcut bağlantı varsa kullan, yoksa yenisini oluştur
     let connection = getVoiceConnection(guildId);
     if (!connection) {
       connection = joinVoiceChannel({
@@ -350,9 +372,8 @@ export async function addToQueue(
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
     } catch (err) {
-      logger.error({ err }, "Ses kanalı bağlantısı kurulamadı");
       connection.destroy();
-      return { track: null, position: 0, error: "Ses kanalına bağlanılamadı (20 saniye içinde hazır olmadı)" };
+      return { track: null, position: 0, error: "Ses kanalına bağlanılamadı" };
     }
 
     connection.subscribe(player);
@@ -360,19 +381,16 @@ export async function addToQueue(
     queue = { tracks: [], player, paused: false, textChannel, volume: 100 };
     queues.set(guildId, queue);
 
-    // Bağlantı kopunca yeniden bağlan
-    connection.on(VoiceConnectionStatus.Disconnected, async (_oldState, _newState) => {
+    // Yeniden bağlanma
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
       if (!queues.has(guildId)) return;
       try {
-        // Discord'un kendiliğinden yeniden bağlanmasını 5 sn bekle
         await Promise.race([
           entersState(connection!, VoiceConnectionStatus.Signalling, 5_000),
           entersState(connection!, VoiceConnectionStatus.Connecting, 5_000),
         ]);
-        // Signalling/Connecting → Ready'e geçmesini bekle
         await entersState(connection!, VoiceConnectionStatus.Ready, 20_000);
       } catch {
-        // Yeniden bağlanamadı — connection hâlâ canlıysa yeniden katıl
         if (connection!.state.status !== VoiceConnectionStatus.Destroyed) {
           try {
             if (connection!.rejoinAttempts < 5) {
@@ -382,7 +400,7 @@ export async function addToQueue(
             } else {
               connection!.destroy();
               queues.delete(guildId);
-              textChannel.send("⚠️ Ses kanalı bağlantısı kesildi ve yeniden kurulamadı.").catch(() => null);
+              textChannel.send("⚠️ Ses bağlantısı kesildi ve yeniden kurulamadı.").catch(() => null);
             }
           } catch {
             connection!.destroy();
@@ -396,7 +414,6 @@ export async function addToQueue(
       queues.delete(guildId);
     });
 
-    // Şarkı bitince sonraki şarkıya geç
     player.on(AudioPlayerStatus.Idle, () => {
       const q = queues.get(guildId);
       if (!q) return;
@@ -405,7 +422,7 @@ export async function addToQueue(
     });
 
     player.on("error", (err) => {
-      logger.error({ err }, "Oynatıcı hatası");
+      logger.error({ err: err.message }, "Oynatıcı hatası");
       const q = queues.get(guildId);
       if (!q) return;
       q.tracks.shift();
