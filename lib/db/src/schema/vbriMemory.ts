@@ -1,24 +1,24 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, timestamp, serial } from "drizzle-orm/pg-core";
 
-export const vbriMemoriesTable = sqliteTable("vbri_memories", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  guildId: text("guild_id").notNull(),
-  userId: text("user_id"),
-  type: text("type").notNull().default("fact"), // "fact" | "preference" | "correction"
-  content: text("content").notNull(),
-  keywords: text("keywords").default(""),
-  importance: integer("importance").default(1),
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+export const vbriMemoriesTable = pgTable("vbri_memories", {
+  id:          serial("id").primaryKey(),
+  guildId:     text("guild_id").notNull(),
+  userId:      text("user_id"),
+  type:        text("type").notNull().default("fact"),
+  content:     text("content").notNull(),
+  keywords:    text("keywords").default(""),
+  importance:  integer("importance").default(1),
+  createdAt:   timestamp("created_at").defaultNow(),
   accessCount: integer("access_count").default(0),
 });
 
-export const vbriConversationsTable = sqliteTable("vbri_conversations", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const vbriConversationsTable = pgTable("vbri_conversations", {
+  id:        serial("id").primaryKey(),
   channelId: text("channel_id").notNull(),
-  userId: text("user_id").notNull(),
-  role: text("role").notNull(), // "user" | "bot"
-  content: text("content").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  userId:    text("user_id").notNull(),
+  role:      text("role").notNull(),
+  content:   text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export type VbriMemory = typeof vbriMemoriesTable.$inferSelect;

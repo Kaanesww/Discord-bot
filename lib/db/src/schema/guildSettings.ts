@@ -1,10 +1,10 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, boolean, timestamp } from "drizzle-orm/pg-core";
 
-export const guildSettingsTable = sqliteTable("guild_settings", {
+export const guildSettingsTable = pgTable("guild_settings", {
   guildId:      text("guild_id").primaryKey(),
   prefix:       text("prefix").notNull().default("v!"),
-  levelEnabled: integer("level_enabled", { mode: "boolean" }).notNull().default(true),
-  updatedAt:    integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  levelEnabled: boolean("level_enabled").notNull().default(true),
+  updatedAt:    timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type GuildSettings = typeof guildSettingsTable.$inferSelect;
