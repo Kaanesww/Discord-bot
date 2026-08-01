@@ -2084,9 +2084,9 @@ const prefixHandlers: Record<string, PfxHandler> = {
 
 export async function startBot(): Promise<void> {
   const token    = process.env["DISCORD_TOKEN"];
-  const clientId = process.env["DISCORD_CLIENT_ID"];
+  const clientId = process.env["DISCORD_CLIENTID"] ?? process.env["DISCORD_CLIENT_ID"];
   if (!token)    { logger.warn("DISCORD_TOKEN eksik — bot başlamayacak."); return; }
-  if (!clientId) { logger.warn("DISCORD_CLIENT_ID eksik — bot başlamayacak."); return; }
+  if (!clientId) { logger.warn("DISCORD_CLIENTID eksik — bot başlamayacak."); return; }
 
   const client = new Client({
     intents: [
