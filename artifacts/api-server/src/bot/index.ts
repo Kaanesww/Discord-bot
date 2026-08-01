@@ -552,6 +552,94 @@ async function pfxKanalAc(m: Message, args: string[]): Promise<void> {
   }
 }
 
+// ── MESAJ AT ─────────────────────────────────────────────────────────────────
+// Kullanım:
+//   v!mesajat #kanal Mesaj metni          → normal mesaj
+//   v!mesajat embed #kanal Başlık | Açıklama → embed mesaj
+
+async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+
+  // Yetki: Yönetici veya ManageMessages
+  const member = m.guild.members.cache.get(m.author.id)
+    ?? await m.guild.members.fetch(m.author.id).catch(() => null);
+  const hasPermission =
+    isOwner(m.author.id) ||
+    m.guild.ownerId === m.author.id ||
+    member?.permissions.has(PermissionFlagsBits.Administrator) ||
+    member?.permissions.has(PermissionFlagsBits.ManageMessages);
+
+  if (!hasPermission) {
+    await m.reply("❌ Bu komutu kullanmak için **Mesajları Yönet** veya **Yönetici** yetkisine ihtiyacın var.");
+    return;
+  }
+
+  if (args.length < 2) {
+    await m.reply(
+      "❌ **Kullanım:**\n" +
+      "`v!mesajat #kanal Mesaj metni` — Normal mesaj gönderir\n" +
+      "`v!mesajat embed #kanal Başlık | Açıklama` — Embed gönderir\n" +
+      "`v!mesajat embed #kanal Açıklama` — Embed gönderir (sadece açıklama)\n\n" +
+      "💡 Embed'de `|` ile başlık ve açıklamayı ayırabilirsin."
+    );
+    return;
+  }
+
+  // embed mi normal mi?
+  const isEmbed = args[0]!.toLowerCase() === "embed";
+  const remaining = isEmbed ? args.slice(1) : args;
+
+  // Kanal mention'ı bul
+  const channelArg = remaining[0]!;
+  const channelId = channelArg.replace(/[<#>]/g, "");
+  const targetChannel = m.guild.channels.cache.get(channelId);
+
+  if (!targetChannel || !(targetChannel instanceof TextChannel)) {
+    await m.reply("❌ Geçerli bir yazı kanalı belirt. Örnek: `v!mesajat #genel Merhaba!`");
+    return;
+  }
+
+  const messageText = remaining.slice(1).join(" ").trim();
+  if (!messageText) {
+    await m.reply("❌ Gönderilecek mesaj boş olamaz.");
+    return;
+  }
+
+  try {
+    if (isEmbed) {
+      // Başlık | Açıklama ayrımı (| karakteri varsa)
+      const pipeIdx = messageText.indexOf("|");
+      const title = pipeIdx !== -1 ? messageText.slice(0, pipeIdx).trim() : null;
+      const description = pipeIdx !== -1 ? messageText.slice(pipeIdx + 1).trim() : messageText;
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setDescription(description)
+        .setTimestamp()
+        .setFooter({ text: m.guild.name, iconURL: m.guild.iconURL() ?? undefined });
+
+      if (title) embed.setTitle(title);
+
+      await targetChannel.send({ embeds: [embed] });
+    } else {
+      await targetChannel.send(messageText);
+    }
+
+    // Komutu kullanan kişiye onay ver (ephemeral-benzeri: silinir)
+    const confirm = await m.reply(
+      `✅ Mesaj **#${targetChannel.name}** kanalına ${isEmbed ? "embed olarak" : "normal şekilde"} gönderildi.`
+    );
+    setTimeout(() => {
+      confirm.delete().catch(() => null);
+      m.delete().catch(() => null);
+    }, 5000);
+
+  } catch (err) {
+    logger.error({ err }, "Mesaj gönderme hatası");
+    await m.reply(`❌ Mesaj gönderilemedi: ${(err as Error).message}`);
+  }
+}
+
 // ── MODSETUP ──────────────────────────────────────────────────────────────────
 
 const MOD_CMD_NAMES: Record<string, ModCommand> = {
@@ -2127,6 +2215,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
   // Kanal oluşturma
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
+  // Kanala mesaj gönder
+  mesajat: pfxMesajAt, duyuru: pfxMesajAt, announce: pfxMesajAt, say: pfxMesajAt,
   // Video istek sistemi
   videoistek: async (m, _args) => {
     await sendVideoRequest(m);
