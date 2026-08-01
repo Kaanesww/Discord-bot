@@ -2,6 +2,7 @@ import {
   Client, Events, GatewayIntentBits,
   AttachmentBuilder, TextChannel, ChannelType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  PermissionFlagsBits, EmbedBuilder,
   type Message,
 } from "discord.js";
 import { readFileSync } from "fs";
