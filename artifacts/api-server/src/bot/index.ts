@@ -44,6 +44,8 @@ import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin,
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
+import { sendVideoRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel } from "./videoRequestSystem";
+
 import { generateWarnCard } from "./warnCard";
 import { AuditLogEvent, type GuildMember } from "discord.js";
 
@@ -2041,6 +2043,41 @@ const prefixHandlers: Record<string, PfxHandler> = {
   modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
   // Stat
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
+  // Video istek sistemi
+  videoistek: async (m, _args) => {
+    await sendVideoRequest(m);
+  },
+  videosetup: async (m, args) => {
+    if (!m.guildId) return;
+    // Sadece sunucu sahibi kullanabilir
+    if (m.author.id !== m.guild?.ownerId) {
+      await m.reply("❌ Bu komutu yalnızca sunucu sahibi kullanabilir.");
+      return;
+    }
+    if (args.length === 0) {
+      const current = await getVideoModerationChannel(m.guildId);
+      await m.reply(
+        `📋 **Video Moderasyon Sistemi**\n` +
+        `Mevcut mod kanalı: ${current ? `<#${current}>` : "_Ayarlanmamış_"}\n\n` +
+        `**Kullanım:**\n` +
+        `\`v!videosetup #kanal\` — Mod kanalını ayarla\n` +
+        `\`v!videosetup kaldir\` — Mod kanalını kaldır`
+      );
+      return;
+    }
+    if (args[0]?.toLowerCase() === "kaldir" || args[0]?.toLowerCase() === "kaldır") {
+      await setVideoModerationChannel(m.guildId, null);
+      await m.reply("✅ Video moderasyon kanalı kaldırıldı.");
+      return;
+    }
+    const ch = m.mentions.channels.first();
+    if (!ch || !(ch instanceof TextChannel)) {
+      await m.reply("❌ Kullanım: `v!videosetup #kanal`");
+      return;
+    }
+    await setVideoModerationChannel(m.guildId, ch.id);
+    await m.reply(`✅ Video moderasyon kanalı **#${ch.name}** olarak ayarlandı!\nArtık üyeler \`v!videoistek #hedef-kanal açıklama\` komutuyla video paylaşım isteği gönderebilir.`);
+  },
 };
 
 // ── Bot başlatma ──────────────────────────────────────────────────────────────
@@ -2168,6 +2205,14 @@ export async function startBot(): Promise<void> {
     if (customId.startsWith("modapprove_") || customId.startsWith("modreject_")) {
       await handleApprovalButton(interaction).catch((err) =>
         logger.error({ err }, "Mod onay butonu hatası")
+      );
+      return;
+    }
+
+    // Video istek onay/red butonları
+    if (customId.startsWith("videoapprove_") || customId.startsWith("videoreject_")) {
+      await handleVideoApprovalButton(interaction).catch((err) =>
+        logger.error({ err }, "Video onay butonu hatası")
       );
       return;
     }

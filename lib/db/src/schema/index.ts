@@ -8,3 +8,4 @@ export * from "./economy";
 export * from "./guardSettings";
 export * from "./statChannels";
 export * from "./giveaways";
+export * from "./videoRequestSettings";
