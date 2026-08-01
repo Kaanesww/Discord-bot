@@ -2320,7 +2320,7 @@ export async function startBot(): Promise<void> {
         { name: `${guildCount} sunucuda hizmet`, type: 3 as const },
         { name: `${memberCount.toLocaleString("en-US")} kullanıcıya`, type: 3 as const },
         { name: "v!yardim", type: 2 as const },
-        { name: "VBRI & TURKLAND", type: 3 as const },
+        { name: "West & Bartu & Santana", type: 3 as const },
       ];
       const idx = Math.floor(Date.now() / 30_000) % statuses.length;
       const s = statuses[idx]!;
