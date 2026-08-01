@@ -470,6 +470,87 @@ async function pfxAc(m: Message): Promise<void> {
   await sendModLog(m, m.guildId, `🔓 **Kanal Kilidi Açıldı** | <#${m.channel.id}> | Mod: <@${m.author.id}>`);
 }
 
+// ── KANAL AÇ ──────────────────────────────────────────────────────────────────
+
+async function pfxKanalAc(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+
+  // Yetki kontrolü: ManageChannels veya Yönetici
+  const member = m.guild.members.cache.get(m.author.id)
+    ?? await m.guild.members.fetch(m.author.id).catch(() => null);
+  const hasPermission =
+    isOwner(m.author.id) ||
+    m.guild.ownerId === m.author.id ||
+    member?.permissions.has(PermissionFlagsBits.ManageChannels) ||
+    member?.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!hasPermission) {
+    await m.reply("❌ Kanal oluşturmak için **Kanalları Yönet** yetkisine ihtiyacın var.");
+    return;
+  }
+
+  if (args.length === 0) {
+    await m.reply(
+      "❌ **Kullanım:**\n" +
+      "`v!kanalac <kanal-ismi>` — Normal kanal\n" +
+      "`v!kanalac <kanal-ismi> nsfw` — 18+ yaş sınırlı kanal\n\n" +
+      "Kanal ismi boşluk içeriyorsa tire kullan: `v!kanalac genel-sohbet`"
+    );
+    return;
+  }
+
+  // Son argüman "nsfw", "yaş", "18" veya "18+" ise yaş sınırlı
+  const lastArg = args[args.length - 1]!.toLowerCase();
+  const isNsfw = ["nsfw", "yaş", "yas", "18", "18+", "yetişkin", "yetiskin"].includes(lastArg);
+  const nameParts = isNsfw ? args.slice(0, -1) : args;
+  const channelName = nameParts.join("-").toLowerCase().replace(/[^a-z0-9ğüşıöç\-_]/gi, "").slice(0, 100);
+
+  if (!channelName) {
+    await m.reply("❌ Geçerli bir kanal ismi gir.");
+    return;
+  }
+
+  // Kanalı oluşturan kişinin bulunduğu kategoriyi al (opsiyonel)
+  const parentId = m.channel instanceof TextChannel ? m.channel.parentId ?? undefined : undefined;
+
+  try {
+    const newChannel = await m.guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      nsfw: isNsfw,
+      parent: parentId,
+      permissionOverwrites: [
+        {
+          id: m.guild.id, // @everyone
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+        },
+      ],
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(isNsfw ? 0xed4245 : 0x57f287)
+      .setTitle(`${isNsfw ? "🔞" : "✅"} Kanal Oluşturuldu`)
+      .addFields(
+        { name: "📺 Kanal", value: `<#${newChannel.id}>`, inline: true },
+        { name: "👤 Oluşturan", value: `<@${m.author.id}>`, inline: true },
+        { name: "🔞 Yaş Sınırı", value: isNsfw ? "**18+ (NSFW)**" : "Yok", inline: true },
+      )
+      .setTimestamp();
+
+    await m.reply({ embeds: [embed] });
+
+    // Yeni kanalda hoş geldin mesajı
+    const welcomeMsg = isNsfw
+      ? `🔞 **Bu kanal 18+ içerik için ayrılmıştır.**\n<@${m.author.id}> tarafından oluşturuldu. Lütfen sunucu kurallarına uy.`
+      : `👋 **${channelName}** kanalına hoş geldiniz!\n<@${m.author.id}> tarafından oluşturuldu. Mesaj atmaya başlayabilirsiniz.`;
+
+    await newChannel.send(welcomeMsg);
+  } catch (err) {
+    logger.error({ err }, "Kanal oluşturma hatası");
+    await m.reply(`❌ Kanal oluşturulamadı: ${(err as Error).message}`);
+  }
+}
+
 // ── MODSETUP ──────────────────────────────────────────────────────────────────
 
 const MOD_CMD_NAMES: Record<string, ModCommand> = {
@@ -2043,6 +2124,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
   // Stat
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
+  // Kanal oluşturma
+  kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
   // Video istek sistemi
   videoistek: async (m, _args) => {
     await sendVideoRequest(m);
