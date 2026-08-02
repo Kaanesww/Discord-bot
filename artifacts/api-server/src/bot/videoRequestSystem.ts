@@ -430,17 +430,14 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
     // Embed + dosyaları hedef kanala gönder
     const contentEmbed = new EmbedBuilder()
       .setColor(0x57f287)
-      .setFooter({
-        text: `${req.requestorTag} tarafından paylaşıldı • ${typeLine} • ${totalMB} MB`,
-      })
+      .setFooter({ text: `${typeLine} • ${totalMB} MB` })
       .setTimestamp();
 
     if (req.description) contentEmbed.setDescription(req.description);
 
     await targetChannel.send({
-      content: `<@${req.requestorId}>`,
-      embeds:  req.description ? [contentEmbed] : [],
-      files:   req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
+      embeds: req.description ? [contentEmbed] : [],
+      files:  req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
 
     // Mod mesajını güncelle
