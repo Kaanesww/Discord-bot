@@ -1,8 +1,9 @@
 /**
- * Video Yükleme İstek Sistemi
+ * Medya Paylaşım İstek Sistemi  (v!paylaş)
  * ─────────────────────────────────────────────────────────────────────────────
- * Üyeler bot üzerinden video paylaşım isteği gönderir.
- * İstek moderasyon kanalına düşer; owner onaylarsa video hedef kanala yüklenir.
+ * Üyeler birden fazla video/fotoğraf ekleyerek paylaşım isteği gönderir.
+ * İstek mod kanalına düşer; onaylayan roller veya yöneticiler karar verir.
+ * Dosyalar gönderim anında indirilip bellekte tutulur → CDN URL süresi sorun olmaz.
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  PermissionFlagsBits,
 } from "discord.js";
 import { db } from "@workspace/db";
 import { videoRequestSettingsTable } from "@workspace/db";
@@ -22,71 +24,140 @@ import { logger } from "../lib/logger";
 
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
-const MAX_VIDEO_BYTES = 95 * 1024 * 1024; // 95 MB
+const MAX_FILE_BYTES  = 95 * 1024 * 1024; // 95 MB tek dosya
+const MAX_TOTAL_BYTES = 95 * 1024 * 1024; // 95 MB toplam
+
+const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".avi", ".mkv"]);
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const ALLOWED_EXTENSIONS = new Set([...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS]);
+
 const VIDEO_CONTENT_TYPES = new Set([
   "video/mp4", "video/webm", "video/mov", "video/avi",
   "video/mkv", "video/quicktime", "video/x-matroska",
 ]);
-const VIDEO_EXTENSIONS = new Set([
-  ".mp4", ".webm", ".mov", ".avi", ".mkv",
+const IMAGE_CONTENT_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp",
 ]);
+
+// ── Dosya yapısı (bellekte saklanan) ─────────────────────────────────────────
+
+interface StoredFile {
+  name: string;
+  buffer: Buffer;
+  size: number;
+  isVideo: boolean;
+}
 
 // ── Bekleyen istek yapısı ─────────────────────────────────────────────────────
 
-export interface PendingVideoRequest {
+export interface PendingMediaRequest {
   guildId: string;
   requestorId: string;
   requestorTag: string;
   targetChannelId: string;
   description: string;
-  attachmentUrl: string;
-  attachmentName: string;
-  attachmentSize: number;
+  files: StoredFile[];
   createdAt: number;
 }
 
-const pendingVideoRequests = new Map<string, PendingVideoRequest>();
+const pendingRequests = new Map<string, PendingMediaRequest>();
 let counter = 0;
 
 function newReqId(): string {
-  return `vr_${Date.now()}_${++counter}`;
+  return `mr_${Date.now()}_${++counter}`;
 }
 
-// ── Ayarlar: DB erişim ────────────────────────────────────────────────────────
+// ── DB: Ayarlar ───────────────────────────────────────────────────────────────
 
-export async function getVideoModerationChannel(guildId: string): Promise<string | null> {
-  const row = await db
-    .select({ moderationChannelId: videoRequestSettingsTable.moderationChannelId })
+export async function getVideoSettings(guildId: string) {
+  const rows = await db
+    .select()
     .from(videoRequestSettingsTable)
     .where(eq(videoRequestSettingsTable.guildId, guildId))
     .limit(1);
-  return row[0]?.moderationChannelId ?? null;
+  const row = rows[0];
+  return {
+    moderationChannelId: row?.moderationChannelId ?? null,
+    approvalRoles: JSON.parse(row?.approvalRoles ?? "[]") as string[],
+  };
 }
 
-export async function setVideoModerationChannel(
-  guildId: string,
-  channelId: string | null,
-): Promise<void> {
+export async function setVideoModerationChannel(guildId: string, channelId: string | null): Promise<void> {
   await db
     .insert(videoRequestSettingsTable)
-    .values({ guildId, moderationChannelId: channelId ?? undefined })
+    .values({ guildId, moderationChannelId: channelId })
     .onConflictDoUpdate({
       target: videoRequestSettingsTable.guildId,
-      set: { moderationChannelId: channelId ?? undefined, updatedAt: new Date() },
+      set: { moderationChannelId: channelId, updatedAt: new Date() },
     });
+}
+
+export async function addApprovalRole(guildId: string, roleId: string): Promise<string[]> {
+  const s = await getVideoSettings(guildId);
+  if (!s.approvalRoles.includes(roleId)) s.approvalRoles.push(roleId);
+  await db
+    .insert(videoRequestSettingsTable)
+    .values({ guildId, approvalRoles: JSON.stringify(s.approvalRoles) })
+    .onConflictDoUpdate({
+      target: videoRequestSettingsTable.guildId,
+      set: { approvalRoles: JSON.stringify(s.approvalRoles), updatedAt: new Date() },
+    });
+  return s.approvalRoles;
+}
+
+export async function removeApprovalRole(guildId: string, roleId: string): Promise<string[]> {
+  const s = await getVideoSettings(guildId);
+  const updated = s.approvalRoles.filter((r) => r !== roleId);
+  await db
+    .insert(videoRequestSettingsTable)
+    .values({ guildId, approvalRoles: JSON.stringify(updated) })
+    .onConflictDoUpdate({
+      target: videoRequestSettingsTable.guildId,
+      set: { approvalRoles: JSON.stringify(updated), updatedAt: new Date() },
+    });
+  return updated;
+}
+
+// ── Eski uyumluluk export ─────────────────────────────────────────────────────
+export async function getVideoModerationChannel(guildId: string): Promise<string | null> {
+  return (await getVideoSettings(guildId)).moderationChannelId;
+}
+
+// ── Yetki kontrolü ────────────────────────────────────────────────────────────
+
+async function canApprove(interaction: ButtonInteraction, guildId: string): Promise<boolean> {
+  if (!interaction.guild) return false;
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member) return false;
+  if (interaction.guild.ownerId === interaction.user.id) return true;
+  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+
+  const settings = await getVideoSettings(guildId);
+  if (settings.approvalRoles.length > 0) {
+    return settings.approvalRoles.some((rid) => member.roles.cache.has(rid));
+  }
+  return false;
 }
 
 // ── Embed yapıcılar ───────────────────────────────────────────────────────────
 
-function buildRequestEmbed(req: PendingVideoRequest, reqId: string): EmbedBuilder {
-  const sizeMB = (req.attachmentSize / (1024 * 1024)).toFixed(2);
+function buildRequestEmbed(req: PendingMediaRequest, reqId: string): EmbedBuilder {
+  const totalMB = (req.files.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(2);
+  const videoCount = req.files.filter((f) => f.isVideo).length;
+  const imageCount = req.files.filter((f) => !f.isVideo).length;
+
+  const typeLine = [
+    videoCount > 0 ? `🎬 ${videoCount} video` : "",
+    imageCount > 0 ? `🖼️ ${imageCount} fotoğraf` : "",
+  ].filter(Boolean).join(" • ");
+
   return new EmbedBuilder()
     .setColor(0x5865f2)
-    .setTitle("🎬 Video Paylaşım İsteği — Onay Bekleniyor")
+    .setTitle("📤 Medya Paylaşım İsteği — Onay Bekleniyor")
     .addFields(
-      { name: "📤 İsteyen Üye", value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
+      { name: "👤 İsteyen", value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
       { name: "📺 Hedef Kanal", value: `<#${req.targetChannelId}>`, inline: true },
-      { name: "📁 Dosya", value: `\`${req.attachmentName}\` (${sizeMB} MB)`, inline: false },
+      { name: "📦 Dosyalar", value: `${typeLine} • Toplam **${totalMB} MB**`, inline: false },
       { name: "📝 Açıklama", value: req.description || "_Açıklama girilmedi_" },
     )
     .setFooter({ text: `İstek ID: ${reqId} • 24 saat geçerli` })
@@ -106,157 +177,205 @@ function buildApprovalRow(reqId: string): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-// ── İstek gönder ─────────────────────────────────────────────────────────────
+// ── Dosya türü kontrolü ───────────────────────────────────────────────────────
 
-export async function sendVideoRequest(
-  message: Message,
-): Promise<void> {
+function checkFileType(name: string, contentType: string | null): "video" | "image" | null {
+  const ext = ("." + (name.split(".").pop() ?? "")).toLowerCase();
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  const ct = (contentType ?? "").split(";")[0]!.trim();
+  if (VIDEO_CONTENT_TYPES.has(ct)) return "video";
+  if (IMAGE_CONTENT_TYPES.has(ct)) return "image";
+  return null;
+}
+
+// ── Ana komut: v!paylaş ───────────────────────────────────────────────────────
+
+export async function sendMediaRequest(message: Message): Promise<void> {
   const client = message.client;
   if (!message.guildId || !message.guild) {
     await message.reply("❌ Bu komut sadece sunucularda kullanılabilir.");
     return;
   }
 
-  // Argümanları ayrıştır: videoistek #kanal açıklama
-  const content = message.content;
-  const spaceIdx = content.indexOf(" ");
-  const rest = spaceIdx !== -1 ? content.slice(spaceIdx + 1).trim() : "";
+  // Argümanlar: paylaş #kanal açıklama
+  const prefix = message.content.split(" ")[0]!;
+  const rest   = message.content.slice(prefix.length).trim();
 
-  // #kanal ve açıklama
   const channelMatch = rest.match(/^<#(\d+)>\s*(.*)/s);
   if (!channelMatch) {
     await message.reply(
-      "❌ **Kullanım:** `v!videoistek #hedef-kanal Açıklama burada`\n" +
-      "📎 Komutu kullanırken videoyı mesajına ekle (95 MB üst sınır)."
+      "❌ **Kullanım:** `v!paylaş #hedef-kanal Açıklama`\n" +
+      "📎 Video ve/veya fotoğraf ekle (her biri maks 95 MB)\n" +
+      "💡 Birden fazla dosya aynı mesaja eklenebilir."
     );
     return;
   }
 
   const targetChannelId = channelMatch[1]!;
-  const description = channelMatch[2]?.trim() ?? "";
+  const description     = channelMatch[2]?.trim() ?? "";
 
-  // Ek dosya var mı?
-  const attachment = message.attachments.first();
-  if (!attachment) {
-    await message.reply("❌ Lütfen bir video dosyası ekleyerek bu komutu kullan.");
+  // Ek dosyalar
+  const attachments = [...message.attachments.values()];
+  if (attachments.length === 0) {
+    await message.reply("❌ Lütfen en az bir video veya fotoğraf ekle.");
     return;
   }
 
-  // Dosya boyutu kontrolü
-  if (attachment.size > MAX_VIDEO_BYTES) {
-    const mb = (attachment.size / (1024 * 1024)).toFixed(2);
-    await message.reply(`❌ Video boyutu çok büyük: **${mb} MB**. Maksimum izin verilen: **95 MB**.`);
-    return;
+  // Her dosyayı doğrula
+  const invalid: string[] = [];
+  let totalSize = 0;
+
+  for (const att of attachments) {
+    const kind = checkFileType(att.name, att.contentType);
+    if (!kind) {
+      invalid.push(`\`${att.name}\` — desteklenmeyen tür`);
+      continue;
+    }
+    if (att.size > MAX_FILE_BYTES) {
+      const mb = (att.size / 1024 / 1024).toFixed(2);
+      invalid.push(`\`${att.name}\` — ${mb} MB (maks 95 MB)`);
+      continue;
+    }
+    totalSize += att.size;
   }
 
-  // Video uzantısı kontrolü
-  const ext = attachment.name
-    ? "." + attachment.name.split(".").pop()!.toLowerCase()
-    : "";
-  const isVideoExt = VIDEO_EXTENSIONS.has(ext);
-  const isVideoType = attachment.contentType
-    ? VIDEO_CONTENT_TYPES.has(attachment.contentType.split(";")[0]!.trim())
-    : false;
-
-  if (!isVideoExt && !isVideoType) {
+  if (invalid.length > 0) {
     await message.reply(
-      "❌ Desteklenen video formatları: MP4, WebM, MOV, AVI, MKV\n" +
-      `Yüklenen dosya: \`${attachment.name}\``
+      `❌ Şu dosyalar kabul edilemedi:\n${invalid.map((e) => `• ${e}`).join("\n")}\n\n` +
+      `Desteklenen formatlar: MP4, WebM, MOV, AVI, MKV, JPG, PNG, GIF, WEBP`
     );
     return;
   }
 
-  // Hedef kanal var mı?
+  if (totalSize > MAX_TOTAL_BYTES) {
+    await message.reply(`❌ Toplam dosya boyutu maks **95 MB** olabilir. Şu an: **${(totalSize / 1024 / 1024).toFixed(2)} MB**`);
+    return;
+  }
+
+  // Hedef kanal
   const targetChannel = message.guild.channels.cache.get(targetChannelId);
   if (!targetChannel || !(targetChannel instanceof TextChannel)) {
     await message.reply("❌ Belirtilen kanal bulunamadı veya bir yazı kanalı değil.");
     return;
   }
 
-  // Moderasyon kanalı ayarlı mı?
-  const modChannelId = await getVideoModerationChannel(message.guildId);
-  if (!modChannelId) {
+  // Mod kanalı
+  const settings = await getVideoSettings(message.guildId);
+  if (!settings.moderationChannelId) {
     await message.reply(
-      "❌ Video moderasyon kanalı henüz ayarlanmamış.\n" +
-      "Sunucu sahibi `v!videosetup #kanal` komutuyla ayarlayabilir."
+      "❌ Medya moderasyon kanalı ayarlanmamış.\n" +
+      "Sunucu sahibi `v!videosetup #kanal` ile ayarlayabilir."
     );
     return;
   }
 
-  const modChannel = await client.channels.fetch(modChannelId).catch(() => null);
+  const modChannel = await client.channels.fetch(settings.moderationChannelId).catch(() => null);
   if (!modChannel || !(modChannel instanceof TextChannel)) {
-    await message.reply("❌ Moderasyon kanalına erişilemiyor. Lütfen sunucu sahibiyle iletişime geç.");
+    await message.reply("❌ Moderasyon kanalına erişilemiyor.");
     return;
   }
 
-  // İstek oluştur ve kaydet
-  const req: PendingVideoRequest = {
+  // Onay rolü bilgisi
+  const rolesMention = settings.approvalRoles.length > 0
+    ? settings.approvalRoles.map((r) => `<@&${r}>`).join(", ")
+    : "_Yöneticiler_";
+
+  await message.reply("⏳ Dosyalar işleniyor, isteğin gönderiliyor...");
+
+  // Tüm dosyaları şimdi indir (URL henüz taze)
+  const stored: StoredFile[] = [];
+  try {
+    for (const att of attachments) {
+      const kind = checkFileType(att.name, att.contentType)!;
+      const res  = await fetch(att.url);
+      if (!res.ok) throw new Error(`${att.name} indirilemedi (HTTP ${res.status})`);
+      const buffer = Buffer.from(await res.arrayBuffer());
+      stored.push({ name: att.name, buffer, size: att.size, isVideo: kind === "video" });
+    }
+  } catch (err) {
+    logger.error({ err }, "Dosya indirme hatası");
+    await message.reply(`❌ Dosya indirilemedi: ${(err as Error).message}`);
+    return;
+  }
+
+  const req: PendingMediaRequest = {
     guildId: message.guildId,
     requestorId: message.author.id,
     requestorTag: message.author.tag,
     targetChannelId,
     description,
-    attachmentUrl: attachment.url,
-    attachmentName: attachment.name,
-    attachmentSize: attachment.size,
+    files: stored,
     createdAt: Date.now(),
   };
 
   const reqId = newReqId();
-  pendingVideoRequests.set(reqId, req);
+  pendingRequests.set(reqId, req);
+  setTimeout(() => pendingRequests.delete(reqId), 24 * 60 * 60 * 1000);
 
-  // 24 saat sonra otomatik temizle
-  setTimeout(() => pendingVideoRequests.delete(reqId), 24 * 60 * 60 * 1000);
-
-  // Moderasyon kanalına gönder
+  // Mod kanalına embed + dosyalar gönder
   await modChannel.send({
-    embeds: [buildRequestEmbed(req, reqId)],
+    content: `📬 Onay bekleyen medya isteği | Onaylayabilecekler: ${rolesMention}`,
+    embeds:  [buildRequestEmbed(req, reqId)],
     components: [buildApprovalRow(reqId)],
+    files: stored.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
   });
 
   await message.reply(
-    `✅ Video isteğin **#${targetChannel.name}** kanalı için gönderildi!\n` +
-    `📋 İsteğin moderasyon kanalında inceleniyor, onaylandığında video yüklenecek.`
+    `✅ İsteğin **#${targetChannel.name}** kanalı için gönderildi!\n` +
+    `📋 Moderasyon kanalında inceleniyor — onaylandığında yüklenecek.`
   );
 
-  logger.info({ reqId, guildId: message.guildId, requestorId: message.author.id }, "Video isteği gönderildi");
+  logger.info({ reqId, guildId: message.guildId, files: stored.length }, "Medya isteği gönderildi");
 }
 
-// ── Buton etkileşimi işle ─────────────────────────────────────────────────────
+// ── Buton etkileşimi ─────────────────────────────────────────────────────────
 
 export async function handleVideoApprovalButton(interaction: ButtonInteraction): Promise<void> {
   const { customId } = interaction;
   const isApprove = customId.startsWith("videoapprove_");
   const reqId = customId.replace("videoapprove_", "").replace("videoreject_", "");
-  const req = pendingVideoRequests.get(reqId);
+
+  const req = pendingRequests.get(reqId);
 
   if (!req) {
     await interaction.reply({
-      content: "❌ Bu istek artık geçerli değil veya süresi dolmuş.",
+      content: "❌ Bu istek artık geçerli değil veya süresi dolmuş (24 saat).",
       ephemeral: true,
     });
     return;
   }
 
   if (!interaction.guild) {
-    await interaction.reply({ content: "❌ Bu işlem bir sunucuda yapılmalıdır.", ephemeral: true });
+    await interaction.reply({ content: "❌ Sunucuda kullanılmalıdır.", ephemeral: true });
     return;
   }
 
-  // Sadece sunucu sahibi veya Yönetici yetkisine sahip kişiler onaylayabilir
-  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const isGuildOwner = interaction.guild.ownerId === interaction.user.id;
-  const isAdmin = member?.permissions.has("Administrator") ?? false;
-
-  if (!isGuildOwner && !isAdmin) {
+  // Yetki kontrolü
+  const allowed = await canApprove(interaction, req.guildId);
+  if (!allowed) {
+    const settings = await getVideoSettings(req.guildId);
+    const roleList = settings.approvalRoles.length > 0
+      ? settings.approvalRoles.map((r) => `<@&${r}>`).join(", ")
+      : "Yönetici";
     await interaction.reply({
-      content: "❌ Bu isteği onaylamak için **Yönetici** yetkisine ihtiyacın var.",
+      content: `❌ Bu isteği onaylamak için gerekli role sahip değilsin.\n📋 Onaylayabilecekler: ${roleList}`,
       ephemeral: true,
     });
     return;
   }
 
-  pendingVideoRequests.delete(reqId);
+  // İsteği bellekten kaldır
+  pendingRequests.delete(reqId);
+
+  const videoCount = req.files.filter((f) => f.isVideo).length;
+  const imageCount = req.files.filter((f) => !f.isVideo).length;
+  const totalMB    = (req.files.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(2);
+
+  const typeLine = [
+    videoCount > 0 ? `${videoCount} video` : "",
+    imageCount > 0 ? `${imageCount} fotoğraf` : "",
+  ].filter(Boolean).join(", ");
 
   // ── Reddet ──────────────────────────────────────────────────────────────────
   if (!isApprove) {
@@ -264,97 +383,98 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
       embeds: [
         new EmbedBuilder()
           .setColor(0x72767d)
-          .setTitle("❌ Video İsteği Reddedildi")
+          .setTitle("❌ Medya İsteği Reddedildi")
           .addFields(
-            { name: "İsteyen", value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
-            { name: "Hedef Kanal", value: `<#${req.targetChannelId}>`, inline: true },
-            { name: "Reddeden", value: `<@${interaction.user.id}>`, inline: true },
-            { name: "Dosya", value: `\`${req.attachmentName}\`` },
+            { name: "İsteyen",     value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
+            { name: "Hedef Kanal", value: `<#${req.targetChannelId}>`,                   inline: true },
+            { name: "Reddeden",    value: `<@${interaction.user.id}>`,                   inline: true },
+            { name: "Dosyalar",    value: typeLine || "—" },
           )
           .setTimestamp(),
       ],
       components: [],
     });
 
-    // İsteyen kişiye DM gönder
     try {
       const requestor = await interaction.client.users.fetch(req.requestorId);
       await requestor.send(
-        `❌ **${interaction.guild.name}** sunucusundaki video paylaşım isteğin ` +
-        `**${interaction.user.tag}** tarafından reddedildi.\n` +
-        `📁 Dosya: \`${req.attachmentName}\``
+        `❌ **${interaction.guild.name}** sunucusundaki medya paylaşım isteğin ` +
+        `**${interaction.user.tag}** tarafından reddedildi.`
       );
     } catch { /* DM kapalı */ }
 
-    logger.info({ reqId, reviewerId: interaction.user.id }, "Video isteği reddedildi");
+    logger.info({ reqId, reviewer: interaction.user.id }, "Medya isteği reddedildi");
     return;
   }
 
-  // ── Onayla — videoyu hedef kanala yükle ─────────────────────────────────────
+  // ── Onayla ──────────────────────────────────────────────────────────────────
+  // Önce interaction'ı güncelle (3 sn timeout'u önlemek için)
+  await interaction.update({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xfee75c)
+        .setTitle("⏳ Onaylandı — Yükleniyor...")
+        .setDescription("Dosyalar hedef kanala yükleniyor, lütfen bekle.")
+        .setTimestamp(),
+    ],
+    components: [],
+  });
+
   try {
     const targetChannel = await interaction.client.channels.fetch(req.targetChannelId).catch(() => null);
     if (!targetChannel || !(targetChannel instanceof TextChannel)) {
-      await interaction.reply({
-        content: "❌ Hedef kanal bulunamadı veya erişilemiyor.",
-        ephemeral: true,
-      });
+      await interaction.editReply({ content: "❌ Hedef kanal bulunamadı." });
       return;
     }
 
-    // Videoyu indir ve yükle
-    const response = await fetch(req.attachmentUrl);
-    if (!response.ok) throw new Error(`CDN isteği başarısız: ${response.status}`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-
-    const sizeMB = (req.attachmentSize / (1024 * 1024)).toFixed(2);
-    const videoEmbed = new EmbedBuilder()
+    // Embed + dosyaları hedef kanala gönder
+    const contentEmbed = new EmbedBuilder()
       .setColor(0x57f287)
-      .setDescription(req.description || null)
       .setFooter({
-        text: `${req.requestorTag} tarafından paylaşıldı • ${sizeMB} MB`,
+        text: `${req.requestorTag} tarafından paylaşıldı • ${typeLine} • ${totalMB} MB`,
       })
       .setTimestamp();
 
+    if (req.description) contentEmbed.setDescription(req.description);
+
     await targetChannel.send({
-      embeds: req.description ? [videoEmbed] : [],
-      files: [new AttachmentBuilder(buffer, { name: req.attachmentName })],
-      content: req.description ? undefined : `📹 <@${req.requestorId}> tarafından paylaşıldı`,
+      content: `<@${req.requestorId}>`,
+      embeds:  req.description ? [contentEmbed] : [],
+      files:   req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
 
-    // Onay mesajını güncelle
-    await interaction.update({
+    // Mod mesajını güncelle
+    await interaction.editReply({
       embeds: [
         new EmbedBuilder()
           .setColor(0x57f287)
-          .setTitle("✅ Video İsteği Onaylandı — Yüklendi")
+          .setTitle("✅ Medya İsteği Onaylandı")
           .addFields(
-            { name: "İsteyen", value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
-            { name: "Hedef Kanal", value: `<#${req.targetChannelId}>`, inline: true },
-            { name: "Onaylayan", value: `<@${interaction.user.id}>`, inline: true },
-            { name: "Dosya", value: `\`${req.attachmentName}\` (${sizeMB} MB)` },
+            { name: "İsteyen",     value: `<@${req.requestorId}> (${req.requestorTag})`, inline: true },
+            { name: "Hedef Kanal", value: `<#${req.targetChannelId}>`,                   inline: true },
+            { name: "Onaylayan",   value: `<@${interaction.user.id}>`,                   inline: true },
+            { name: "Dosyalar",    value: `${typeLine} • ${totalMB} MB` },
           )
           .setTimestamp(),
       ],
-      components: [],
     });
 
-    // İsteyen kişiye bildir
     try {
       const requestor = await interaction.client.users.fetch(req.requestorId);
       await requestor.send(
-        `✅ **${interaction.guild.name}** sunucusundaki video paylaşım isteğin ` +
+        `✅ **${interaction.guild.name}** sunucusundaki medya paylaşım isteğin ` +
         `**${interaction.user.tag}** tarafından onaylandı!\n` +
-        `📺 Video <#${req.targetChannelId}> kanalına yüklendi.`
+        `📺 <#${req.targetChannelId}> kanalına yüklendi.`
       );
     } catch { /* DM kapalı */ }
 
-    logger.info({ reqId, reviewerId: interaction.user.id, targetChannelId: req.targetChannelId }, "Video isteği onaylandı ve yüklendi");
+    logger.info({ reqId, reviewer: interaction.user.id, target: req.targetChannelId }, "Medya onaylandı ve yüklendi");
 
   } catch (err) {
-    logger.error({ err, reqId }, "Video onay yükleme hatası");
-    await interaction.reply({
-      content: `❌ Video yüklenirken hata oluştu: ${(err as Error).message}`,
-      ephemeral: true,
+    logger.error({ err, reqId }, "Medya yükleme hatası");
+    await interaction.editReply({
+      content: `❌ Yükleme sırasında hata: ${(err as Error).message}`,
+      embeds: [],
     }).catch(() => null);
   }
 }

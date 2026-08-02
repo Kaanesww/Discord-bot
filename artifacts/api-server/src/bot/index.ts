@@ -45,7 +45,7 @@ import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin,
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
-import { sendVideoRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel } from "./videoRequestSystem";
+import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole } from "./videoRequestSystem";
 
 import { generateWarnCard } from "./warnCard";
 import { AuditLogEvent, type GuildMember } from "discord.js";
@@ -637,6 +637,81 @@ async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
   } catch (err) {
     logger.error({ err }, "Mesaj gönderme hatası");
     await m.reply(`❌ Mesaj gönderilemedi: ${(err as Error).message}`);
+  }
+}
+
+// ── KATEGORİ AÇ ───────────────────────────────────────────────────────────────
+// v!kategoriac <isim> [#kanal1 #kanal2 ...]
+// Kategori oluşturur; mention'lı kanalları o kategoriye taşır.
+
+async function pfxKategoriAc(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+
+  const member = m.guild.members.cache.get(m.author.id)
+    ?? await m.guild.members.fetch(m.author.id).catch(() => null);
+  const hasPermission =
+    isOwner(m.author.id) ||
+    m.guild.ownerId === m.author.id ||
+    member?.permissions.has(PermissionFlagsBits.ManageChannels) ||
+    member?.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!hasPermission) {
+    await m.reply("❌ Kategori oluşturmak için **Kanalları Yönet** yetkisine ihtiyacın var.");
+    return;
+  }
+
+  // İsim: mention'lardan önceki kelimeler
+  const mentionedChannels = [...m.mentions.channels.values()].filter(
+    (ch) => ch instanceof TextChannel
+  ) as TextChannel[];
+  const mentionedIds = new Set(mentionedChannels.map((c) => c.id));
+
+  // Args'tan kanal mention'larını çıkar, geri kalanı isim yap
+  const nameWords = args.filter((a) => !a.startsWith("<#") && !a.startsWith("#"));
+  const categoryName = nameWords.join(" ").trim();
+
+  if (!categoryName) {
+    await m.reply(
+      "❌ **Kullanım:**\n" +
+      "`v!kategoriac <isim>` — Boş kategori oluşturur\n" +
+      "`v!kategoriac <isim> #kanal1 #kanal2` — Kategori oluşturur ve kanalları taşır"
+    );
+    return;
+  }
+
+  try {
+    // Kategori oluştur
+    const category = await m.guild.channels.create({
+      name: categoryName,
+      type: ChannelType.GuildCategory,
+    });
+
+    // Mention'lanan kanalları bu kategoriye taşı
+    const moved: string[] = [];
+    for (const ch of mentionedChannels) {
+      await ch.setParent(category.id, { lockPermissions: false }).catch(() => null);
+      moved.push(`<#${ch.id}>`);
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("📁 Kategori Oluşturuldu")
+      .addFields(
+        { name: "📂 Kategori", value: `**${category.name}**`, inline: true },
+        { name: "👤 Oluşturan", value: `<@${m.author.id}>`, inline: true },
+      );
+
+    if (moved.length > 0) {
+      embed.addFields({ name: `📦 Taşınan Kanallar (${moved.length})`, value: moved.join("\n") });
+    } else {
+      embed.addFields({ name: "💡 İpucu", value: "Kanal taşımak için: `v!kategoriac <isim> #kanal1 #kanal2`" });
+    }
+
+    embed.setTimestamp();
+    await m.reply({ embeds: [embed] });
+  } catch (err) {
+    logger.error({ err }, "Kategori oluşturma hatası");
+    await m.reply(`❌ Kategori oluşturulamadı: ${(err as Error).message}`);
   }
 }
 
@@ -2217,41 +2292,90 @@ const prefixHandlers: Record<string, PfxHandler> = {
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
   // Kanala mesaj gönder
   mesajat: pfxMesajAt, duyuru: pfxMesajAt, announce: pfxMesajAt, say: pfxMesajAt,
-  // Video istek sistemi
-  videoistek: async (m, _args) => {
-    await sendVideoRequest(m);
-  },
+  // ── Medya paylaşım (v!paylaş) ────────────────────────────────────────────────
+  "paylaş": async (m) => { await sendMediaRequest(m); },
+  paylas:   async (m) => { await sendMediaRequest(m); },
+  paylash:  async (m) => { await sendMediaRequest(m); },
+  // eski alias — geriye uyumluluk
+  videoistek: async (m) => { await sendMediaRequest(m); },
+
+  // ── Medya paylaşım kurulum (v!videosetup) ────────────────────────────────────
   videosetup: async (m, args) => {
-    if (!m.guildId) return;
-    // Sadece sunucu sahibi kullanabilir
-    if (m.author.id !== m.guild?.ownerId) {
+    if (!m.guildId || !m.guild) return;
+    if (m.author.id !== m.guild.ownerId && !isOwner(m.author.id)) {
       await m.reply("❌ Bu komutu yalnızca sunucu sahibi kullanabilir.");
       return;
     }
-    if (args.length === 0) {
-      const current = await getVideoModerationChannel(m.guildId);
+
+    const sub  = args[0]?.toLowerCase() ?? "";
+    const gid  = m.guildId;
+
+    // durum / yardım
+    if (!sub || sub === "durum" || sub === "bilgi") {
+      const s = await getVideoSettings(gid);
+      const roleList = s.approvalRoles.length > 0
+        ? s.approvalRoles.map((r) => `<@&${r}>`).join(", ")
+        : "_Ayarlanmamış (sadece Yöneticiler)_";
       await m.reply(
-        `📋 **Video Moderasyon Sistemi**\n` +
-        `Mevcut mod kanalı: ${current ? `<#${current}>` : "_Ayarlanmamış_"}\n\n` +
-        `**Kullanım:**\n` +
-        `\`v!videosetup #kanal\` — Mod kanalını ayarla\n` +
-        `\`v!videosetup kaldir\` — Mod kanalını kaldır`
+        `📋 **Medya Paylaşım Kurulumu**\n` +
+        `> Mod kanalı: ${s.moderationChannelId ? `<#${s.moderationChannelId}>` : "_Ayarlanmamış_"}\n` +
+        `> Onay rolleri: ${roleList}\n\n` +
+        `**Alt komutlar:**\n` +
+        `\`v!videosetup #kanal\` — Mod kanalı ayarla\n` +
+        `\`v!videosetup kaldir\` — Mod kanalını kaldır\n` +
+        `\`v!videosetup onayrol @rol\` — Onay rolü ekle\n` +
+        `\`v!videosetup onayrolkaldir @rol\` — Onay rolünü kaldır`
       );
       return;
     }
-    if (args[0]?.toLowerCase() === "kaldir" || args[0]?.toLowerCase() === "kaldır") {
-      await setVideoModerationChannel(m.guildId, null);
-      await m.reply("✅ Video moderasyon kanalı kaldırıldı.");
+
+    // onayrol ekle
+    if (sub === "onayrol") {
+      const role = m.mentions.roles.first();
+      if (!role) { await m.reply("❌ Kullanım: `v!videosetup onayrol @rol`"); return; }
+      const updated = await addApprovalRole(gid, role.id);
+      await m.reply(`✅ **@${role.name}** onay rollerine eklendi.\n📋 Güncel roller: ${updated.map((r) => `<@&${r}>`).join(", ")}`);
       return;
     }
+
+    // onayrolkaldir
+    if (sub === "onayrolkaldir" || sub === "onayrolkaldır") {
+      const role = m.mentions.roles.first();
+      if (!role) { await m.reply("❌ Kullanım: `v!videosetup onayrolkaldir @rol`"); return; }
+      const updated = await removeApprovalRole(gid, role.id);
+      await m.reply(
+        `✅ **@${role.name}** onay rollerinden kaldırıldı.\n` +
+        `📋 Güncel roller: ${updated.length > 0 ? updated.map((r) => `<@&${r}>`).join(", ") : "_Yok (sadece Yöneticiler)_"}`
+      );
+      return;
+    }
+
+    // kaldır
+    if (sub === "kaldir" || sub === "kaldır") {
+      await setVideoModerationChannel(gid, null);
+      await m.reply("✅ Moderasyon kanalı kaldırıldı.");
+      return;
+    }
+
+    // #kanal
     const ch = m.mentions.channels.first();
     if (!ch || !(ch instanceof TextChannel)) {
       await m.reply("❌ Kullanım: `v!videosetup #kanal`");
       return;
     }
-    await setVideoModerationChannel(m.guildId, ch.id);
-    await m.reply(`✅ Video moderasyon kanalı **#${ch.name}** olarak ayarlandı!\nArtık üyeler \`v!videoistek #hedef-kanal açıklama\` komutuyla video paylaşım isteği gönderebilir.`);
+    await setVideoModerationChannel(gid, ch.id);
+    await m.reply(
+      `✅ Moderasyon kanalı **#${ch.name}** olarak ayarlandı!\n` +
+      `Üyeler \`v!paylaş #hedef-kanal açıklama\` komutuyla istek gönderebilir.\n` +
+      `💡 Onay rolleri eklemek için: \`v!videosetup onayrol @rol\``
+    );
   },
+
+  // ── Kategori oluştur ──────────────────────────────────────────────────────────
+  kategoriac:     pfxKategoriAc,
+  kategorioluştur: pfxKategoriAc,
+  kategoriyap:    pfxKategoriAc,
+  kategoriolustur: pfxKategoriAc,
 };
 
 // ── Bot başlatma ──────────────────────────────────────────────────────────────
