@@ -49,6 +49,14 @@ import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel,
 
 import { generateWarnCard } from "./warnCard";
 import { AuditLogEvent, type GuildMember } from "discord.js";
+import {
+  getTagRoleSettings,
+  setTagRoleSettings,
+  removeTagRoleSettings,
+  syncMemberTagRole,
+  syncGuildTagRoles,
+  removeManagedRoleFromGuild,
+} from "./tagRole";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
 let COIN = "🪙"; // fallback, uygulama emojisi yüklenince güncellenir
@@ -437,6 +445,85 @@ async function pfxTemizle(m: Message, args: string[]): Promise<void> {
   const deleted = await m.channel.bulkDelete(msgs, true);
   const reply = await m.channel.send(`🗑️ **${Math.max(deleted.size - 1, 0)}** mesaj silindi.`);
   setTimeout(() => reply.delete().catch(() => null), 4000);
+}
+
+async function pfxTagRol(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId || !m.member) return;
+
+  const canConfigure =
+    m.guild.ownerId === m.author.id ||
+    m.member.permissions.has(PermissionFlagsBits.ManageGuild);
+  if (!canConfigure) {
+    await m.reply("❌ Bu ayarı sadece sunucu sahibi veya Sunucuyu Yönet yetkisi olanlar değiştirebilir.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+  const current = await getTagRoleSettings(m.guildId);
+
+  if (!sub || sub === "durum" || sub === "status") {
+    if (!current) {
+      await m.reply(
+        "ℹ️ Etiket rolü ayarlanmamış.\n" +
+        "Kullanım: `v!tagrol ayarla ETIKET @rol`",
+      );
+      return;
+    }
+    await m.reply(
+      `✅ Etiket rolü aktif.\n` +
+      `Etiket: **${current.tag}**\n` +
+      `Rol: <@&${current.roleId}>`,
+    );
+    return;
+  }
+
+  if (sub === "kaldır" || sub === "kaldir" || sub === "sil" || sub === "off") {
+    if (!current) {
+      await m.reply("ℹ️ Etiket rolü ayarı zaten bulunmuyor.");
+      return;
+    }
+    await removeTagRoleSettings(m.guildId);
+    const removed = await removeManagedRoleFromGuild(m.guild, current.roleId);
+    await m.reply(`✅ Etiket rolü ayarı kaldırıldı. ${removed} üyeden rol geri çekildi.`);
+    return;
+  }
+
+  if (sub !== "ayarla" && sub !== "kur" && sub !== "set") {
+    await m.reply(
+      "❌ Kullanım:\n" +
+      "`v!tagrol ayarla ETIKET @rol`\n" +
+      "`v!tagrol durum`\n" +
+      "`v!tagrol kaldır`",
+    );
+    return;
+  }
+
+  const tag = args[1]?.trim();
+  const role = m.mentions.roles.first();
+  if (!tag || !role) {
+    await m.reply("❌ Kullanım: `v!tagrol ayarla ETIKET @rol`");
+    return;
+  }
+  if (tag.length > 4) {
+    await m.reply("❌ Discord sunucu etiketleri en fazla 4 karakter olabilir.");
+    return;
+  }
+  if (role.managed) {
+    await m.reply("❌ Entegrasyon tarafından yönetilen bir rol seçilemez.");
+    return;
+  }
+  const botMember = m.guild.members.me;
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position) {
+    await m.reply("❌ Botun bu rolü yönetebilmesi için **Rolleri Yönet** yetkisi ve rolden daha yüksek bir bot rolü olmalı.");
+    return;
+  }
+
+  await setTagRoleSettings(m.guildId, tag, role.id);
+  const result = await syncGuildTagRoles(m.guild);
+  await m.reply(
+    `✅ **${tag}** etiketi için <@&${role.id}> rolü ayarlandı.\n` +
+    `Senkronizasyon: **${result.added}** rol verildi, **${result.removed}** rol geri çekildi.`,
+  );
 }
 
 async function pfxNuke(m: Message): Promise<void> {
@@ -2162,6 +2249,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   leaderboard: (m) => pfxLeaderboard(m), lb: (m) => pfxLeaderboard(m), top: (m) => pfxLeaderboard(m),
   // Level rol
   levelrol: pfxLevelRol,
+  tagrol: pfxTagRol,
+  etiketrol: pfxTagRol,
   // Sicil
   sicil: (m) => pfxSicil(m),
   // Moderasyon
@@ -2459,6 +2548,27 @@ export async function startBot(): Promise<void> {
 
     // ── Aktif çekilişleri yeniden başlat ─────────────────────────────────────
     resumeActiveGiveaways(c).catch(() => null);
+
+    // ── Sunucu etiketi → rol senkronizasyonu ─────────────────────────────────
+    for (const guild of c.guilds.cache.values()) {
+      syncGuildTagRoles(guild).catch((err) =>
+        logger.warn({ err, guildId: guild.id }, "Etiket rolleri başlangıçta senkronize edilemedi"),
+      );
+    }
+  });
+
+  // Kullanıcı sunucu etiketini etkinleştirdiğinde/kaldırdığında tetiklenir.
+  client.on(Events.UserUpdate, async (oldUser, newUser) => {
+    if (oldUser.primaryGuild?.tag === newUser.primaryGuild?.tag &&
+        oldUser.primaryGuild?.identityEnabled === newUser.primaryGuild?.identityEnabled &&
+        oldUser.primaryGuild?.identityGuildId === newUser.primaryGuild?.identityGuildId) {
+      return;
+    }
+
+    for (const guild of client.guilds.cache.values()) {
+      const member = guild.members.cache.get(newUser.id);
+      if (member) await syncMemberTagRole(member).catch(() => null);
+    }
   });
 
   // ── Ses XP ───────────────────────────────────────────────────────────────
@@ -2560,6 +2670,11 @@ export async function startBot(): Promise<void> {
   // ── Guard: Bot katılım koruması ───────────────────────────────────────────
   client.on(Events.GuildMemberAdd, async (member: GuildMember) => {
     await handleBotJoin(member).catch(() => null);
+    await syncMemberTagRole(member).catch(() => null);
+  });
+
+  client.on(Events.GuildMemberUpdate, async (_oldMember, newMember) => {
+    await syncMemberTagRole(newMember).catch(() => null);
   });
 
   // ── Guard: Rol & Kanal saldırısı tespiti ─────────────────────────────────

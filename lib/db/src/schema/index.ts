@@ -9,3 +9,4 @@ export * from "./guardSettings";
 export * from "./statChannels";
 export * from "./giveaways";
 export * from "./videoRequestSettings";
+export * from "./tagRoleSettings";
