@@ -472,11 +472,6 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
-    // ── Davet linki sol üst köşede belirgin şekilde gözükecek biçimde ────────
-    const contentText = inviteUrl
-      ? `\`╔══════════════════════╗\`\n\`║\` 🔗 **${interaction.guild.name}** → **${inviteUrl}**\n\`╚══════════════════════╝\``
-      : undefined;
-
     // ── Watermark uygula ──────────────────────────────────────────────────────
     // Sunucu sahibinin ayarladığı URL, medya dosyalarının sol üstüne işlenir
     const watermarkUrl = inviteUrl;
@@ -500,7 +495,6 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
     }
 
     await targetChannel.send({
-      content: contentText,
       embeds: req.description ? [contentEmbed] : [],
       files:  processedFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
