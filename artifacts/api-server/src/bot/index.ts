@@ -45,7 +45,7 @@ import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin,
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
-import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole } from "./videoRequestSystem";
+import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl } from "./videoRequestSystem";
 
 import { generateWarnCard } from "./warnCard";
 import { AuditLogEvent, type GuildMember } from "discord.js";
@@ -2405,16 +2405,45 @@ const prefixHandlers: Record<string, PfxHandler> = {
       const roleList = s.approvalRoles.length > 0
         ? s.approvalRoles.map((r) => `<@&${r}>`).join(", ")
         : "_Ayarlanmamış (sadece Yöneticiler)_";
+      const storedInvite = await getInviteUrl(gid).catch(() => null);
       await m.reply(
         `📋 **Medya Paylaşım Kurulumu**\n` +
         `> Mod kanalı: ${s.moderationChannelId ? `<#${s.moderationChannelId}>` : "_Ayarlanmamış_"}\n` +
-        `> Onay rolleri: ${roleList}\n\n` +
+        `> Onay rolleri: ${roleList}\n` +
+        `> Davet linki: ${storedInvite ? `**${storedInvite}**` : "_Ayarlanmamış (otomatik oluşturulur)_"}\n\n` +
         `**Alt komutlar:**\n` +
         `\`v!videosetup #kanal\` — Mod kanalı ayarla\n` +
         `\`v!videosetup kaldir\` — Mod kanalını kaldır\n` +
         `\`v!videosetup onayrol @rol\` — Onay rolü ekle\n` +
-        `\`v!videosetup onayrolkaldir @rol\` — Onay rolünü kaldır`
+        `\`v!videosetup onayrolkaldir @rol\` — Onay rolünü kaldır\n` +
+        `\`v!videosetup davetlink discord.gg/xxx\` — Videolarda gösterilecek davet linkini ayarla\n` +
+        `\`v!videosetup davetlinkkaldır\` — Davet linkini kaldır`
       );
+      return;
+    }
+
+    // davetlink ayarla
+    if (sub === "davetlink") {
+      const rawUrl = args[1] ?? "";
+      if (!rawUrl) {
+        await m.reply("❌ Kullanım: `v!videosetup davetlink discord.gg/xxxxxx`");
+        return;
+      }
+      // Hem "discord.gg/xxx" hem "https://discord.gg/xxx" formatlarını kabul et
+      const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+      await setInviteUrl(gid, normalized);
+      await m.reply(
+        `✅ Davet linki ayarlandı!\n` +
+        `Bundan sonra onaylanan her video/fotoğrafın üstünde şu link görünecek:\n` +
+        `**${normalized}**`
+      );
+      return;
+    }
+
+    // davetlinkkaldır
+    if (sub === "davetlinkkaldır" || sub === "davetlinkkaldır" || sub === "davetlinkkaldir") {
+      await setInviteUrl(gid, null);
+      await m.reply("✅ Davet linki kaldırıldı. Artık otomatik oluşturulan link kullanılacak.");
       return;
     }
 

@@ -123,6 +123,21 @@ export async function getVideoModerationChannel(guildId: string): Promise<string
   return (await getVideoSettings(guildId)).moderationChannelId;
 }
 
+// ── Davet linki ayarla / getir ────────────────────────────────────────────────
+export async function setInviteUrl(guildId: string, inviteUrl: string | null): Promise<void> {
+  await db
+    .insert(videoRequestSettingsTable)
+    .values({ guildId, inviteUrl })
+    .onConflictDoUpdate({
+      target: videoRequestSettingsTable.guildId,
+      set: { inviteUrl, updatedAt: new Date() },
+    });
+}
+
+export async function getInviteUrl(guildId: string): Promise<string | null> {
+  return (await getVideoSettings(guildId)).inviteUrl ?? null;
+}
+
 // ── Yetki kontrolü ────────────────────────────────────────────────────────────
 
 async function canApprove(interaction: ButtonInteraction, guildId: string): Promise<boolean> {
@@ -427,23 +442,25 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
       return;
     }
 
-    // ── Sunucu davet linki al veya oluştur ────────────────────────────────────
-    let inviteUrl = "";
-    try {
-      // Önce mevcut kalıcı davetlere bak
-      const invites = await interaction.guild.invites.fetch().catch(() => null);
-      const existing = invites?.find((inv) => inv.maxAge === 0 && !inv.temporary);
-      if (existing) {
-        inviteUrl = existing.url;
-      } else {
-        // Kalıcı bir davet oluştur (targetChannel veya ilk metin kanalında)
-        const invCh = targetChannel instanceof TextChannel ? targetChannel : null;
-        if (invCh) {
-          const inv = await invCh.createInvite({ maxAge: 0, maxUses: 0, unique: false, reason: "Video paylaşım davet linki" });
+    // ── Sunucu davet linki (önce DB'den al) ──────────────────────────────────
+    let inviteUrl = await getInviteUrl(req.guildId).catch(() => null);
+
+    // DB'de yoksa otomatik oluşturmaya çalış
+    if (!inviteUrl) {
+      try {
+        const invites = await interaction.guild.invites.fetch().catch(() => null);
+        const existing = invites?.find((inv) => inv.maxAge === 0 && !inv.temporary);
+        if (existing) {
+          inviteUrl = existing.url;
+        } else {
+          const inv = await targetChannel.createInvite({
+            maxAge: 0, maxUses: 0, unique: false,
+            reason: "Video paylaşım davet linki",
+          });
           inviteUrl = inv.url;
         }
-      }
-    } catch { /* davet izni yoksa sessizce geç */ }
+      } catch { /* davet izni yoksa sessizce geç */ }
+    }
 
     // Embed + dosyaları hedef kanala gönder
     const contentEmbed = new EmbedBuilder()
@@ -453,9 +470,11 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
-    // Davet linki videonun ÜSTÜNDE content olarak gönderilir
+    // ── Davet linki sol üst köşede belirgin şekilde gözükecek biçimde ────────
+    // Discord'da content (metin), embed ve dosyalardan ÖNCE gösterilir
+    // Büyük bold + link formatı ile sol üstte yeterince dikkat çekici olur
     const contentText = inviteUrl
-      ? `🔗 **${interaction.guild.name}** sunucusuna katıl: ${inviteUrl}`
+      ? `\`╔══════════════════════╗\`\n\`║\` 🔗 **${interaction.guild.name}** → **${inviteUrl}**\n\`╚══════════════════════╝\``
       : undefined;
 
     await targetChannel.send({
