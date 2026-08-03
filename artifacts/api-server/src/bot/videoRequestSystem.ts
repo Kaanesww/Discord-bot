@@ -427,6 +427,24 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
       return;
     }
 
+    // ── Sunucu davet linki al veya oluştur ────────────────────────────────────
+    let inviteUrl = "";
+    try {
+      // Önce mevcut kalıcı davetlere bak
+      const invites = await interaction.guild.invites.fetch().catch(() => null);
+      const existing = invites?.find((inv) => inv.maxAge === 0 && !inv.temporary);
+      if (existing) {
+        inviteUrl = existing.url;
+      } else {
+        // Kalıcı bir davet oluştur (targetChannel veya ilk metin kanalında)
+        const invCh = targetChannel instanceof TextChannel ? targetChannel : null;
+        if (invCh) {
+          const inv = await invCh.createInvite({ maxAge: 0, maxUses: 0, unique: false, reason: "Video paylaşım davet linki" });
+          inviteUrl = inv.url;
+        }
+      }
+    } catch { /* davet izni yoksa sessizce geç */ }
+
     // Embed + dosyaları hedef kanala gönder
     const contentEmbed = new EmbedBuilder()
       .setColor(0x57f287)
@@ -435,7 +453,13 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
+    // Davet linki videonun ÜSTÜNDE content olarak gönderilir
+    const contentText = inviteUrl
+      ? `🔗 **${interaction.guild.name}** sunucusuna katıl: ${inviteUrl}`
+      : undefined;
+
     await targetChannel.send({
+      content: contentText,
       embeds: req.description ? [contentEmbed] : [],
       files:  req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
