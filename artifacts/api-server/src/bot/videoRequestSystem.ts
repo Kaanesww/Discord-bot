@@ -21,6 +21,7 @@ import { db } from "@workspace/db";
 import { videoRequestSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
+import { applyImageWatermark, applyVideoWatermark } from "./watermark";
 
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ export async function getVideoSettings(guildId: string) {
   return {
     moderationChannelId: row?.moderationChannelId ?? null,
     approvalRoles: JSON.parse(row?.approvalRoles ?? "[]") as string[],
+    inviteUrl: row?.inviteUrl ?? null,
   };
 }
 
@@ -471,16 +473,36 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
     if (req.description) contentEmbed.setDescription(req.description);
 
     // ── Davet linki sol üst köşede belirgin şekilde gözükecek biçimde ────────
-    // Discord'da content (metin), embed ve dosyalardan ÖNCE gösterilir
-    // Büyük bold + link formatı ile sol üstte yeterince dikkat çekici olur
     const contentText = inviteUrl
       ? `\`╔══════════════════════╗\`\n\`║\` 🔗 **${interaction.guild.name}** → **${inviteUrl}**\n\`╚══════════════════════╝\``
       : undefined;
 
+    // ── Watermark uygula ──────────────────────────────────────────────────────
+    // Sunucu sahibinin ayarladığı URL, medya dosyalarının sol üstüne işlenir
+    const watermarkUrl = inviteUrl;
+    const processedFiles: Array<{ buffer: Buffer; name: string }> = [];
+
+    for (const f of req.files) {
+      if (watermarkUrl) {
+        try {
+          if (f.isVideo) {
+            processedFiles.push(await applyVideoWatermark(f.buffer, f.name, watermarkUrl));
+          } else {
+            processedFiles.push(await applyImageWatermark(f.buffer, f.name, watermarkUrl));
+          }
+        } catch (err) {
+          logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal dosya kullanılıyor");
+          processedFiles.push({ buffer: f.buffer, name: f.name });
+        }
+      } else {
+        processedFiles.push({ buffer: f.buffer, name: f.name });
+      }
+    }
+
     await targetChannel.send({
       content: contentText,
       embeds: req.description ? [contentEmbed] : [],
-      files:  req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
+      files:  processedFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
 
     // Mod mesajını güncelle
