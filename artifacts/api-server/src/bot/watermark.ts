@@ -131,13 +131,43 @@ async function buildWatermarkPng(text: string, fontSize: number): Promise<Buffer
   return canvas.toBuffer("image/png");
 }
 
+// ── https:// ön ekini kaldır ──────────────────────────────────────────────────
+function stripHttps(url: string): string {
+  return url.replace(/^https?:\/\//i, "");
+}
+
+// ── Rastgele watermark konumu ─────────────────────────────────────────────────
+// 4 köşe + 4 kenar ortası arasından rastgele seçilir
+type WatermarkPos = { startX: number; startY: number };
+
+function randomPosition(
+  canvasW: number,
+  canvasH: number,
+  wmW: number,
+  wmH: number,
+  margin: number,
+): WatermarkPos {
+  const candidates: WatermarkPos[] = [
+    { startX: margin,                    startY: margin },                    // sol üst
+    { startX: canvasW - wmW - margin,    startY: margin },                    // sağ üst
+    { startX: margin,                    startY: canvasH - wmH - margin },    // sol alt
+    { startX: canvasW - wmW - margin,    startY: canvasH - wmH - margin },    // sağ alt
+    { startX: Math.round((canvasW - wmW) / 2), startY: margin },             // üst orta
+    { startX: Math.round((canvasW - wmW) / 2), startY: canvasH - wmH - margin }, // alt orta
+    { startX: margin,                    startY: Math.round((canvasH - wmH) / 2) }, // sol orta
+    { startX: canvasW - wmW - margin,    startY: Math.round((canvasH - wmH) / 2) }, // sağ orta
+  ];
+  return candidates[Math.floor(Math.random() * candidates.length)]!;
+}
+
 // ── Görsel watermark ──────────────────────────────────────────────────────────
 
 export async function applyImageWatermark(
   buffer: Buffer,
   filename: string,
-  text: string,
+  rawText: string,
 ): Promise<{ buffer: Buffer; name: string }> {
+  const text = stripHttps(rawText);
   try {
     const img    = await loadImage(buffer);
     const canvas = createCanvas(img.width, img.height);
@@ -159,9 +189,8 @@ export async function applyImageWatermark(
     const totalW = iconSize + gap + textW;
     const totalH = Math.max(iconSize, fontSize + 4);
 
-    // Sağ üst köşe konumu
-    const startX = img.width  - totalW - margin;
-    const startY = margin;
+    // Rastgele konum
+    const { startX, startY } = randomPosition(img.width, img.height, totalW, totalH, margin);
     const iconCX = startX + iconR;
     const iconCY = startY + totalH / 2;
 
@@ -202,13 +231,28 @@ export async function applyImageWatermark(
   }
 }
 
+// ── Video için rastgele ffmpeg overlay konumu ─────────────────────────────────
+// Boyutlar çalışma zamanında bilinmediğinden ffmpeg ifadeleri kullanılır
+const VIDEO_OVERLAY_POSITIONS = [
+  "14:14",                                                      // sol üst
+  "main_w-overlay_w-14:14",                                     // sağ üst
+  "14:main_h-overlay_h-14",                                     // sol alt
+  "main_w-overlay_w-14:main_h-overlay_h-14",                   // sağ alt
+  "(main_w-overlay_w)/2:14",                                    // üst orta
+  "(main_w-overlay_w)/2:main_h-overlay_h-14",                  // alt orta
+  "14:(main_h-overlay_h)/2",                                    // sol orta
+  "main_w-overlay_w-14:(main_h-overlay_h)/2",                  // sağ orta
+] as const;
+
 // ── Video watermark ───────────────────────────────────────────────────────────
 
 export async function applyVideoWatermark(
   buffer: Buffer,
   filename: string,
-  text: string,
+  rawText: string,
 ): Promise<{ buffer: Buffer; name: string }> {
+  const text = stripHttps(rawText);
+
   if (!ffmpegPath) {
     logger.warn("ffmpeg bulunamadı, video watermark atlandı");
     return { buffer, name: filename };
@@ -216,7 +260,7 @@ export async function applyVideoWatermark(
 
   let wmBuffer: Buffer;
   try {
-    wmBuffer = await buildWatermarkPng(text, 24); // videolar için 24px
+    wmBuffer = await buildWatermarkPng(text, 24);
   } catch (err) {
     logger.warn({ err }, "Watermark PNG oluşturulamadı, video watermark atlandı");
     return { buffer, name: filename };
@@ -228,25 +272,29 @@ export async function applyVideoWatermark(
   const wmPath     = nodePath.join(tmpdir(), `wm-img-${id}.png`);
   const outputPath = nodePath.join(tmpdir(), `wm-out-${id}${ext}`);
 
+  // Rastgele konum seç
+  const overlayPos = VIDEO_OVERLAY_POSITIONS[
+    Math.floor(Math.random() * VIDEO_OVERLAY_POSITIONS.length)
+  ]!;
+
   await Promise.all([
     writeFile(inputPath, buffer),
     writeFile(wmPath, wmBuffer),
   ]);
 
   try {
-    // Sağ üst köşe: main_w - overlay_w - 14 piksel sağdan, 14 piksel üstten
     await execFileAsync(ffmpegPath, [
       "-i",  inputPath,
       "-i",  wmPath,
       "-filter_complex",
-      "[0:v][1:v]overlay=main_w-overlay_w-14:14",
+      `[0:v][1:v]overlay=${overlayPos}`,
       "-c:a", "copy",
       "-y",
       outputPath,
     ]);
 
     const result = await readFile(outputPath);
-    logger.info({ filename }, "Video watermark eklendi (sağ üst)");
+    logger.info({ filename, overlayPos }, "Video watermark eklendi (rastgele konum)");
     return { buffer: result, name: filename };
   } catch (err) {
     logger.warn({ err, filename }, "ffmpeg watermark hatası, orijinal video kullanılıyor");
