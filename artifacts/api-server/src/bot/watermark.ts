@@ -1,9 +1,9 @@
 /**
  * Watermark Modülü
  * ─────────────────────────────────────────────────────────────────────────────
- * Onaylanan medya dosyalarının sol üst köşesine URL watermark ekler.
+ * Onaylanan medya dosyalarının ORTASINA saydam URL watermark ekler.
  * • Görseller: @napi-rs/canvas ile metin overlay
- * • Videolar:  ffmpeg-static ile image overlay filtresi
+ * • Videolar:  sistem ffmpeg ile image overlay filtresi
  */
 
 import { createCanvas, loadImage } from "@napi-rs/canvas";
@@ -18,36 +18,59 @@ import { logger } from "../lib/logger";
 const execFileAsync = promisify(execFile);
 
 // ── ffmpeg binary ─────────────────────────────────────────────────────────────
-// ffmpeg-static modül tipi için
-import ffmpegBin from "ffmpeg-static";
-const ffmpegPath: string | null = ffmpegBin ?? null;
+// Önce sistem ffmpeg'i dene (NixOS'ta her zaman mevcut),
+// bulunamazsa ffmpeg-static paketini dene.
+function resolveFfmpeg(): string | null {
+  // Sistem ffmpeg – Replit NixOS ortamında mevcut
+  const SYSTEM_FFMPEG = "/nix/store/jj9hkc8i90yb3dpcyyqlncijyj71w9id-replit-runtime-path/bin/ffmpeg";
+  try {
+    const fs = require("node:fs");
+    if (fs.existsSync(SYSTEM_FFMPEG)) return SYSTEM_FFMPEG;
+  } catch { /* ignore */ }
 
-// ── Watermark görsel oluşturucu ───────────────────────────────────────────────
+  // Yedek: ffmpeg-static paketi
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const p = require("ffmpeg-static") as string | null;
+    if (p) return p;
+  } catch { /* ignore */ }
 
-async function createWatermarkPng(url: string, fontSize: number): Promise<Buffer> {
-  const padding = 6;
-  const margin  = 0; // canvas'a 0,0'dan başlayacak, overlay sırasında offset verilir
+  return null;
+}
 
-  const measureCanvas = createCanvas(1, 1);
-  const mCtx = measureCanvas.getContext("2d");
+const ffmpegPath: string | null = resolveFfmpeg();
+
+// ── Watermark PNG oluşturucu (hem görsel hem video için kullanılır) ────────────
+
+async function buildWatermarkPng(url: string, fontSize: number): Promise<Buffer> {
+  const padding = 14;
+
+  // Metin genişliğini ölç
+  const mc  = createCanvas(1, 1);
+  const mCtx = mc.getContext("2d");
   mCtx.font = `bold ${fontSize}px sans-serif`;
-  const measured = mCtx.measureText(url);
-  const textW = Math.ceil(measured.width);
+  const textW = Math.ceil(mCtx.measureText(url).width);
   const textH = fontSize;
 
   const cw = textW + padding * 2;
   const ch = textH + padding * 2;
 
   const canvas = createCanvas(cw, ch);
-  const ctx = canvas.getContext("2d");
+  const ctx    = canvas.getContext("2d");
 
-  // Yarı saydam arka plan
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  // Yarı saydam arka plan (daha şeffaf)
+  ctx.fillStyle = "rgba(0,0,0,0.30)";
   ctx.fillRect(0, 0, cw, ch);
 
-  // URL metni
-  ctx.font = `bold ${fontSize}px sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  // Hafif gölge — okunabilirliği artırır
+  ctx.shadowColor   = "rgba(0,0,0,0.60)";
+  ctx.shadowBlur    = 6;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+
+  // Metin
+  ctx.font      = `bold ${fontSize}px sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.80)";
   ctx.fillText(url, padding, padding + textH - 2);
 
   return canvas.toBuffer("image/png");
@@ -61,32 +84,44 @@ export async function applyImageWatermark(
   url: string,
 ): Promise<{ buffer: Buffer; name: string }> {
   try {
-    const img = await loadImage(buffer);
+    const img    = await loadImage(buffer);
     const canvas = createCanvas(img.width, img.height);
     const ctx    = canvas.getContext("2d");
 
     // Orijinal görseli çiz
     ctx.drawImage(img, 0, 0);
 
-    // Yazı tipi: görselin genişliğine göre ölçekle, min 12 max 22 px
-    const fontSize = Math.max(12, Math.min(22, Math.round(img.width * 0.022)));
-    const padding  = 6;
-    const margin   = 10; // sol üst boşluk
+    // Font boyutu: görselin genişliğine göre ölçekle, min 24 max 44 px
+    const fontSize = Math.max(24, Math.min(44, Math.round(img.width * 0.045)));
+    const padding  = 14;
 
     ctx.font = `bold ${fontSize}px sans-serif`;
-    const measured = ctx.measureText(url);
-    const textW = Math.ceil(measured.width);
+    const textW = Math.ceil(ctx.measureText(url).width);
     const textH = fontSize;
 
-    // Arka plan kutusu
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(margin, margin, textW + padding * 2, textH + padding * 2);
+    const boxW = textW + padding * 2;
+    const boxH = textH + padding * 2;
 
-    // Metin
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.fillText(url, margin + padding, margin + padding + textH - 2);
+    // Merkez koordinatları
+    const bx = Math.round((img.width  - boxW) / 2);
+    const by = Math.round((img.height - boxH) / 2);
 
-    // Çıkış: PNG olarak kaydet (dosya adı uzantısını güncelle)
+    // Yarı saydam arka plan
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
+    ctx.fillRect(bx, by, boxW, boxH);
+
+    // Gölge
+    ctx.shadowColor   = "rgba(0,0,0,0.60)";
+    ctx.shadowBlur    = 6;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+
+    // URL metni
+    ctx.font      = `bold ${fontSize}px sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,0.80)";
+    ctx.fillText(url, bx + padding, by + padding + textH - 2);
+
+    // PNG olarak dışa aktar
     const ext     = nodePath.extname(filename).toLowerCase();
     const base    = nodePath.basename(filename, ext);
     const outName = ext === ".png" ? filename : `${base}.png`;
@@ -110,13 +145,11 @@ export async function applyVideoWatermark(
     return { buffer, name: filename };
   }
 
-  const fontSize    = 16;
-  const overlayX    = 10;
-  const overlayY    = 10;
-
+  // Video watermark için daha büyük PNG
+  const fontSize = 32;
   let wmBuffer: Buffer;
   try {
-    wmBuffer = await createWatermarkPng(url, fontSize);
+    wmBuffer = await buildWatermarkPng(url, fontSize);
   } catch (err) {
     logger.warn({ err }, "Watermark PNG oluşturulamadı, video watermark atlandı");
     return { buffer, name: filename };
@@ -134,17 +167,19 @@ export async function applyVideoWatermark(
   ]);
 
   try {
+    // overlay filtresi: watermark PNG'yi videonun tam ortasına yerleştir
     await execFileAsync(ffmpegPath, [
       "-i",  inputPath,
       "-i",  wmPath,
-      "-filter_complex", `[0:v][1:v]overlay=${overlayX}:${overlayY}`,
+      "-filter_complex",
+      "[0:v][1:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2",
       "-c:a", "copy",
       "-y",
       outputPath,
     ]);
 
     const result = await readFile(outputPath);
-    logger.info({ filename, overlayX, overlayY }, "Video watermark eklendi");
+    logger.info({ filename }, "Video watermark eklendi (merkez)");
     return { buffer: result, name: filename };
   } catch (err) {
     logger.warn({ err, filename }, "ffmpeg watermark hatası, orijinal video kullanılıyor");
