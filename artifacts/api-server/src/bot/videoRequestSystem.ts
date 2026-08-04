@@ -472,27 +472,25 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
-    // ── Watermark uygula ──────────────────────────────────────────────────────
-    // Sunucu sahibinin ayarladığı URL, medya dosyalarının sol üstüne işlenir
+    // ── Watermark uygula ─────────────────────────────────────────────────────
+    // Tüm dosyalar aynı anda (paralel) işlenir — hiçbiri atlanmaz
     const watermarkUrl = inviteUrl;
-    const processedFiles: Array<{ buffer: Buffer; name: string }> = [];
 
-    for (const f of req.files) {
-      if (watermarkUrl) {
+    const processedFiles = await Promise.all(
+      req.files.map(async (f) => {
+        if (!watermarkUrl) return { buffer: f.buffer, name: f.name };
         try {
           if (f.isVideo) {
-            processedFiles.push(await applyVideoWatermark(f.buffer, f.name, watermarkUrl));
+            return await applyVideoWatermark(f.buffer, f.name, watermarkUrl);
           } else {
-            processedFiles.push(await applyImageWatermark(f.buffer, f.name, watermarkUrl));
+            return await applyImageWatermark(f.buffer, f.name, watermarkUrl);
           }
         } catch (err) {
-          logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal dosya kullanılıyor");
-          processedFiles.push({ buffer: f.buffer, name: f.name });
+          logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal gönderiliyor");
+          return { buffer: f.buffer, name: f.name };
         }
-      } else {
-        processedFiles.push({ buffer: f.buffer, name: f.name });
-      }
-    }
+      }),
+    );
 
     await targetChannel.send({
       embeds: req.description ? [contentEmbed] : [],

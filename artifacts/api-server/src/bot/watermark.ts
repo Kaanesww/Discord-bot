@@ -1,8 +1,9 @@
 /**
  * Watermark Modülü
  * ─────────────────────────────────────────────────────────────────────────────
- * Onaylanan medya dosyalarının SAĞ ÜST köşesine Discord logosu + metin watermark ekler.
- * Ekran görüntüsündeki gibi: mavi Discord dairesi + beyaz kalın metin, arka plan kutusu yok.
+ * Onaylanan medya dosyalarının rastgele konumuna Discord logosu + metin ekler.
+ * • Görseller : @napi-rs/canvas  (JPEG→JPEG, PNG/GIF/WEBP→PNG)
+ * • Videolar  : ffmpeg libx264 re-encode  (her format → mp4, garantili çalışır)
  */
 
 import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
@@ -18,7 +19,8 @@ const execFileAsync = promisify(execFile);
 
 // ── ffmpeg binary ─────────────────────────────────────────────────────────────
 function resolveFfmpeg(): string | null {
-  const SYSTEM_FFMPEG = "/nix/store/jj9hkc8i90yb3dpcyyqlncijyj71w9id-replit-runtime-path/bin/ffmpeg";
+  const SYSTEM_FFMPEG =
+    "/nix/store/jj9hkc8i90yb3dpcyyqlncijyj71w9id-replit-runtime-path/bin/ffmpeg";
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("node:fs") as typeof import("node:fs");
@@ -34,7 +36,6 @@ function resolveFfmpeg(): string | null {
 const ffmpegPath: string | null = resolveFfmpeg();
 
 // ── Discord ikonu önbelleği ───────────────────────────────────────────────────
-// Discord'un mavi Clyde / logo ikonu, bir kez indirilip bellekte tutulur.
 let _discordIconImg: Image | null = null;
 
 async function getDiscordIcon(): Promise<Image | null> {
@@ -47,16 +48,14 @@ async function getDiscordIcon(): Promise<Image | null> {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) continue;
-      const buf = Buffer.from(await res.arrayBuffer());
-      _discordIconImg = await loadImage(buf);
+      _discordIconImg = await loadImage(Buffer.from(await res.arrayBuffer()));
       return _discordIconImg;
     } catch { /* dene */ }
   }
-  logger.warn("Discord ikonu indirilemedi, yedek çizilecek");
   return null;
 }
 
-// ── Mavi Discord dairesi çiz (yedek) ─────────────────────────────────────────
+// ── Yedek ikon (mavi daire + "d") ────────────────────────────────────────────
 function drawFallbackIcon(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   cx: number,
@@ -76,91 +75,32 @@ function drawFallbackIcon(
   ctx.restore();
 }
 
-// ── Watermark PNG oluşturucu ──────────────────────────────────────────────────
-// Sonuçtaki PNG, hem görsel overlay'i hem de ffmpeg için kullanılır.
-// Layout: [icon] [boşluk] [metin]   — sağ üst köşeye yerleştirilir
-
-async function buildWatermarkPng(text: string, fontSize: number): Promise<Buffer> {
-  const iconSize = Math.round(fontSize * 1.55); // daire çapı
-  const gap      = Math.round(fontSize * 0.4);  // ikon-metin arası
-  const iconR    = iconSize / 2;
-
-  // Metin ölçüsü
-  const mc  = createCanvas(1, 1);
-  const mCtx = mc.getContext("2d");
-  mCtx.font = `bold ${fontSize}px sans-serif`;
-  const textW = Math.ceil(mCtx.measureText(text).width);
-
-  const totalW = iconSize + gap + textW;
-  const totalH = Math.max(iconSize, fontSize + 4);
-
-  const canvas = createCanvas(totalW, totalH);
-  const ctx    = canvas.getContext("2d");
-
-  // ── Discord ikonu ──
-  const iconCX = iconR;
-  const iconCY = totalH / 2;
-  const icon   = await getDiscordIcon();
-
-  if (icon) {
-    // Dairesel kırpma ile ikon çiz
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(iconCX, iconCY, iconR, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.drawImage(icon, iconCX - iconR, iconCY - iconR, iconSize, iconSize);
-    ctx.restore();
-  } else {
-    drawFallbackIcon(ctx, iconCX, iconCY, iconR);
-  }
-
-  // ── Metin: gölge + beyaz yazı ──
-  const textX = iconSize + gap;
-  const textY = iconCY + fontSize * 0.35; // dikey ortalama
-
-  // Gölge — okunabilirlik için
-  ctx.shadowColor   = "rgba(0,0,0,0.75)";
-  ctx.shadowBlur    = 5;
-  ctx.shadowOffsetX = 1;
-  ctx.shadowOffsetY = 1;
-
-  ctx.font      = `bold ${fontSize}px sans-serif`;
-  ctx.fillStyle = "white";
-  ctx.fillText(text, textX, textY);
-
-  return canvas.toBuffer("image/png");
-}
-
 // ── https:// ön ekini kaldır ──────────────────────────────────────────────────
 function stripHttps(url: string): string {
   return url.replace(/^https?:\/\//i, "");
 }
 
-// ── Rastgele watermark konumu ─────────────────────────────────────────────────
-// 4 köşe + 4 kenar ortası arasından rastgele seçilir
-type WatermarkPos = { startX: number; startY: number };
-
-function randomPosition(
-  canvasW: number,
-  canvasH: number,
-  wmW: number,
-  wmH: number,
-  margin: number,
-): WatermarkPos {
-  const candidates: WatermarkPos[] = [
-    { startX: margin,                    startY: margin },                    // sol üst
-    { startX: canvasW - wmW - margin,    startY: margin },                    // sağ üst
-    { startX: margin,                    startY: canvasH - wmH - margin },    // sol alt
-    { startX: canvasW - wmW - margin,    startY: canvasH - wmH - margin },    // sağ alt
-    { startX: Math.round((canvasW - wmW) / 2), startY: margin },             // üst orta
-    { startX: Math.round((canvasW - wmW) / 2), startY: canvasH - wmH - margin }, // alt orta
-    { startX: margin,                    startY: Math.round((canvasH - wmH) / 2) }, // sol orta
-    { startX: canvasW - wmW - margin,    startY: Math.round((canvasH - wmH) / 2) }, // sağ orta
+// ── Rastgele konum hesapla ────────────────────────────────────────────────────
+function randomPos(
+  cw: number, ch: number,
+  wmW: number, wmH: number,
+  m: number,
+): { x: number; y: number } {
+  const opts = [
+    { x: m,            y: m },
+    { x: cw - wmW - m, y: m },
+    { x: m,            y: ch - wmH - m },
+    { x: cw - wmW - m, y: ch - wmH - m },
+    { x: Math.round((cw - wmW) / 2), y: m },
+    { x: Math.round((cw - wmW) / 2), y: ch - wmH - m },
+    { x: m,            y: Math.round((ch - wmH) / 2) },
+    { x: cw - wmW - m, y: Math.round((ch - wmH) / 2) },
   ];
-  return candidates[Math.floor(Math.random() * candidates.length)]!;
+  return opts[Math.floor(Math.random() * opts.length)]!;
 }
 
 // ── Görsel watermark ──────────────────────────────────────────────────────────
+// JPEG girişi → JPEG çıkış (küçük), diğerleri → PNG
 
 export async function applyImageWatermark(
   buffer: Buffer,
@@ -172,29 +112,26 @@ export async function applyImageWatermark(
     const img    = await loadImage(buffer);
     const canvas = createCanvas(img.width, img.height);
     const ctx    = canvas.getContext("2d");
-
     ctx.drawImage(img, 0, 0);
 
-    // Yazı tipi boyutu: görselin genişliğine göre, min 18 max 32 px
+    // Font: görselin genişliğine göre, min 18 max 32 px
     const fontSize = Math.max(18, Math.min(32, Math.round(img.width * 0.038)));
     const iconSize = Math.round(fontSize * 1.55);
     const iconR    = iconSize / 2;
     const gap      = Math.round(fontSize * 0.4);
-    const margin   = 14; // kenardan boşluk
+    const margin   = 14;
 
-    // Metin genişliği
     ctx.font = `bold ${fontSize}px sans-serif`;
-    const textW = Math.ceil(ctx.measureText(text).width);
-
+    const textW  = Math.ceil(ctx.measureText(text).width);
     const totalW = iconSize + gap + textW;
     const totalH = Math.max(iconSize, fontSize + 4);
 
     // Rastgele konum
-    const { startX, startY } = randomPosition(img.width, img.height, totalW, totalH, margin);
-    const iconCX = startX + iconR;
-    const iconCY = startY + totalH / 2;
+    const { x: sx, y: sy } = randomPos(img.width, img.height, totalW, totalH, margin);
+    const iconCX = sx + iconR;
+    const iconCY = sy + totalH / 2;
 
-    // ── Discord ikonu ──
+    // Discord ikonu
     const icon = await getDiscordIcon();
     if (icon) {
       ctx.save();
@@ -207,44 +144,91 @@ export async function applyImageWatermark(
       drawFallbackIcon(ctx, iconCX, iconCY, iconR);
     }
 
-    // ── Metin ──
-    const textX = startX + iconSize + gap;
-    const textY = startY + totalH / 2 + fontSize * 0.35;
-
+    // Metin
+    const textX = sx + iconSize + gap;
+    const textY = sy + totalH / 2 + fontSize * 0.35;
     ctx.shadowColor   = "rgba(0,0,0,0.75)";
     ctx.shadowBlur    = 5;
     ctx.shadowOffsetX = 1;
     ctx.shadowOffsetY = 1;
-    ctx.font          = `bold ${fontSize}px sans-serif`;
-    ctx.fillStyle     = "white";
+    ctx.font      = `bold ${fontSize}px sans-serif`;
+    ctx.fillStyle = "white";
     ctx.fillText(text, textX, textY);
 
-    // PNG olarak dışa aktar
-    const ext     = nodePath.extname(filename).toLowerCase();
-    const base    = nodePath.basename(filename, ext);
-    const outName = ext === ".png" ? filename : `${base}.png`;
-
-    return { buffer: canvas.toBuffer("image/png"), name: outName };
+    // Çıkış formatı: JPEG girişi için JPEG (küçük), diğerleri PNG
+    const ext  = nodePath.extname(filename).toLowerCase();
+    const base = nodePath.basename(filename, ext);
+    if (ext === ".jpg" || ext === ".jpeg") {
+      return {
+        buffer:  canvas.toBuffer("image/jpeg", { quality: 88 }),
+        name:    filename,           // aynı isim, aynı uzantı
+      };
+    }
+    return {
+      buffer:  canvas.toBuffer("image/png"),
+      name:    `${base}.png`,
+    };
   } catch (err) {
-    logger.warn({ err, filename }, "Görsel watermark eklenemedi, orijinal dosya kullanılıyor");
+    logger.warn({ err, filename }, "Görsel watermark hatası, orijinal gönderiliyor");
     return { buffer, name: filename };
   }
 }
 
-// ── Video için rastgele ffmpeg overlay konumu ─────────────────────────────────
-// Boyutlar çalışma zamanında bilinmediğinden ffmpeg ifadeleri kullanılır
+// ── Video watermark ───────────────────────────────────────────────────────────
+// Her format → mp4 (libx264, ultrafast) — en güvenilir yaklaşım.
+
 const VIDEO_OVERLAY_POSITIONS = [
-  "14:14",                                                      // sol üst
-  "main_w-overlay_w-14:14",                                     // sağ üst
-  "14:main_h-overlay_h-14",                                     // sol alt
-  "main_w-overlay_w-14:main_h-overlay_h-14",                   // sağ alt
-  "(main_w-overlay_w)/2:14",                                    // üst orta
-  "(main_w-overlay_w)/2:main_h-overlay_h-14",                  // alt orta
-  "14:(main_h-overlay_h)/2",                                    // sol orta
-  "main_w-overlay_w-14:(main_h-overlay_h)/2",                  // sağ orta
+  "14:14",
+  "main_w-overlay_w-14:14",
+  "14:main_h-overlay_h-14",
+  "main_w-overlay_w-14:main_h-overlay_h-14",
+  "(main_w-overlay_w)/2:14",
+  "(main_w-overlay_w)/2:main_h-overlay_h-14",
+  "14:(main_h-overlay_h)/2",
+  "main_w-overlay_w-14:(main_h-overlay_h)/2",
 ] as const;
 
-// ── Video watermark ───────────────────────────────────────────────────────────
+async function buildWatermarkPng(text: string, fontSize: number): Promise<Buffer> {
+  const iconSize = Math.round(fontSize * 1.55);
+  const iconR    = iconSize / 2;
+  const gap      = Math.round(fontSize * 0.4);
+
+  const mc   = createCanvas(1, 1);
+  const mCtx = mc.getContext("2d");
+  mCtx.font = `bold ${fontSize}px sans-serif`;
+  const textW  = Math.ceil(mCtx.measureText(text).width);
+  const totalW = iconSize + gap + textW;
+  const totalH = Math.max(iconSize, fontSize + 4);
+
+  const canvas = createCanvas(totalW, totalH);
+  const ctx    = canvas.getContext("2d");
+
+  // Ikon
+  const iconCX = iconR;
+  const iconCY = totalH / 2;
+  const icon   = await getDiscordIcon();
+  if (icon) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(iconCX, iconCY, iconR, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(icon, iconCX - iconR, iconCY - iconR, iconSize, iconSize);
+    ctx.restore();
+  } else {
+    drawFallbackIcon(ctx, iconCX, iconCY, iconR);
+  }
+
+  // Metin
+  ctx.shadowColor   = "rgba(0,0,0,0.75)";
+  ctx.shadowBlur    = 5;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+  ctx.font      = `bold ${fontSize}px sans-serif`;
+  ctx.fillStyle = "white";
+  ctx.fillText(text, iconSize + gap, iconCY + fontSize * 0.35);
+
+  return canvas.toBuffer("image/png");
+}
 
 export async function applyVideoWatermark(
   buffer: Buffer,
@@ -258,52 +242,47 @@ export async function applyVideoWatermark(
     return { buffer, name: filename };
   }
 
-  let wmBuffer: Buffer;
-  try {
-    wmBuffer = await buildWatermarkPng(text, 24);
-  } catch (err) {
-    logger.warn({ err }, "Watermark PNG oluşturulamadı, video watermark atlandı");
-    return { buffer, name: filename };
-  }
+  const wmBuffer = await buildWatermarkPng(text, 24);
 
   const id         = randomUUID();
-  const ext        = nodePath.extname(filename).toLowerCase() || ".mp4";
-  const inputPath  = nodePath.join(tmpdir(), `wm-in-${id}${ext}`);
+  const inExt      = nodePath.extname(filename).toLowerCase() || ".mp4";
+  const base       = nodePath.basename(filename, inExt);
+  const inputPath  = nodePath.join(tmpdir(), `wm-in-${id}${inExt}`);
   const wmPath     = nodePath.join(tmpdir(), `wm-img-${id}.png`);
-  const outputPath = nodePath.join(tmpdir(), `wm-out-${id}${ext}`);
+  const outputPath = nodePath.join(tmpdir(), `wm-out-${id}.mp4`); // her zaman mp4
 
-  // Rastgele konum seç
-  const overlayPos = VIDEO_OVERLAY_POSITIONS[
-    Math.floor(Math.random() * VIDEO_OVERLAY_POSITIONS.length)
-  ]!;
+  await Promise.all([writeFile(inputPath, buffer), writeFile(wmPath, wmBuffer)]);
 
-  await Promise.all([
-    writeFile(inputPath, buffer),
-    writeFile(wmPath, wmBuffer),
-  ]);
+  const overlayPos =
+    VIDEO_OVERLAY_POSITIONS[Math.floor(Math.random() * VIDEO_OVERLAY_POSITIONS.length)]!;
 
   try {
+    // libx264 re-encode: her giriş formatıyla çalışır
+    // scale filtresi: h264 çift piksel zorunluluğunu karşılar
     await execFileAsync(ffmpegPath, [
+      "-y",
       "-i",  inputPath,
       "-i",  wmPath,
       "-filter_complex",
-      `[0:v][1:v]overlay=${overlayPos}`,
-      "-c:a", "copy",
-      "-y",
+      `[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[sv];[sv][1:v]overlay=${overlayPos}[out]`,
+      "-map", "[out]",
+      "-map", "0:a?",           // ses varsa kopyala
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-crf", "23",
+      "-c:a", "aac",
+      "-movflags", "+faststart",
       outputPath,
     ]);
 
-    const result = await readFile(outputPath);
-    logger.info({ filename, overlayPos }, "Video watermark eklendi (rastgele konum)");
-    return { buffer: result, name: filename };
+    const result  = await readFile(outputPath);
+    const outName = `${base}.mp4`;
+    logger.info({ filename, outName, overlayPos }, "Video watermark eklendi");
+    return { buffer: result, name: outName };
   } catch (err) {
-    logger.warn({ err, filename }, "ffmpeg watermark hatası, orijinal video kullanılıyor");
+    logger.error({ err, filename }, "ffmpeg watermark hatası, orijinal video gönderiliyor");
     return { buffer, name: filename };
   } finally {
-    await Promise.allSettled([
-      unlink(inputPath),
-      unlink(wmPath),
-      unlink(outputPath),
-    ]);
+    await Promise.allSettled([unlink(inputPath), unlink(wmPath), unlink(outputPath)]);
   }
 }
