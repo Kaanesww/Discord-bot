@@ -17,23 +17,8 @@ import { logger } from "../lib/logger";
 
 const execFileAsync = promisify(execFile);
 
-// ── ffmpeg binary ─────────────────────────────────────────────────────────────
-function resolveFfmpeg(): string | null {
-  const SYSTEM_FFMPEG =
-    "/nix/store/jj9hkc8i90yb3dpcyyqlncijyj71w9id-replit-runtime-path/bin/ffmpeg";
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs") as typeof import("node:fs");
-    if (fs.existsSync(SYSTEM_FFMPEG)) return SYSTEM_FFMPEG;
-  } catch { /* ignore */ }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const p = require("ffmpeg-static") as string | null;
-    if (p) return p;
-  } catch { /* ignore */ }
-  return null;
-}
-const ffmpegPath: string | null = resolveFfmpeg();
+// ffmpeg'i PATH üzerinden çağır — Nix store hash değişse de çalışır
+const ffmpegPath = "ffmpeg";
 
 // ── Discord ikonu önbelleği ───────────────────────────────────────────────────
 let _discordIconImg: Image | null = null;
@@ -236,11 +221,6 @@ export async function applyVideoWatermark(
   rawText: string,
 ): Promise<{ buffer: Buffer; name: string }> {
   const text = stripHttps(rawText);
-
-  if (!ffmpegPath) {
-    logger.warn("ffmpeg bulunamadı, video watermark atlandı");
-    return { buffer, name: filename };
-  }
 
   const wmBuffer = await buildWatermarkPng(text, 24);
 
