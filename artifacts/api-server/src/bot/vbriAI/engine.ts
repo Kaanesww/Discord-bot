@@ -21,6 +21,11 @@ import {
 } from "./responses";
 import { evalMath, extractMathExpr, formatNumber } from "./math";
 import { addTurn, clearContext, getContextSize, lastBotReply } from "./context";
+import {
+  findOwoAnswer, buildTeamRecommendation, buildTierList,
+  OWO_WEAPONS, OWO_SKILLS, OWO_GEMS, OWO_HUNTING, OWO_STATS,
+} from "./owoKnowledge";
+import { generateChatReply, detectChatTopic, getTopicDeepResponse } from "./chatKnowledge";
 
 // ── Cooldown ────────────────────────────────────────────────────────────────
 
@@ -296,6 +301,78 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     return;
   }
 
+  // ── OwO Bot — Takım Tavsiyesi ──────────────────────────────────────────
+  if (intent === "OWO_TEAM") {
+    let r: string;
+    if (/tier list|tier sırala|hangi hayvanlar güçlü|en iyi hayvanlar/.test(lower)) {
+      r = buildTierList();
+    } else {
+      r = buildTeamRecommendation(rawText);
+    }
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  // ── OwO Bot — Genel Bilgi ──────────────────────────────────────────────
+  if (intent === "OWO_GENERAL") {
+    // Önce FAQ/konu eşleşmesi dene
+    const faqAnswer = findOwoAnswer(rawText);
+    let r: string;
+    if (faqAnswer) {
+      r = faqAnswer;
+    } else if (/silah|weapon|wpm/.test(lower)) {
+      r = OWO_WEAPONS;
+    } else if (/skill|yetenek|heal/.test(lower)) {
+      r = OWO_SKILLS;
+    } else if (/gem|taş/.test(lower)) {
+      r = OWO_GEMS;
+    } else if (/hunt|av|farm/.test(lower)) {
+      r = OWO_HUNTING;
+    } else if (/rank|stat|upgrade/.test(lower)) {
+      r = OWO_STATS;
+    } else {
+      // Genel OwO girişi
+      r =
+        "**🦊 OwO Bot Hakkında Bilgi Verebileceğim Konular:**\n\n" +
+        "• `owo takım öner` — En iyi takım kombinasyonları\n" +
+        "• `owo tier list` — Hayvan güç sıralaması\n" +
+        "• `owo silah türleri` — Hangi silah ne işe yarar\n" +
+        "• `owo skill sistemi` — Skill'ler nasıl çalışır\n" +
+        "• `owo gem sistemi` — Gem'leri nasıl kullanırsın\n" +
+        "• `owo hunt stratejisi` — Verimli farming ipuçları\n" +
+        "• `owo rank nasıl artırılır` — Hayvan güçlendirme\n\n" +
+        "Ne öğrenmek istediğini yaz, detaylı anlayayım!";
+    }
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  // ── OwO kelimesi geçiyor ama intent düşük puanlıysa ───────────────────
+  if (/\bowo\b/.test(lower)) {
+    const faqAnswer = findOwoAnswer(rawText);
+    if (faqAnswer) {
+      await send(message, faqAnswer);
+      addTurn(channelId, "bot", faqAnswer);
+      return;
+    }
+    const r = buildTeamRecommendation(rawText);
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  // ── Genel Sohbet (CHAT intent veya belirsiz) ───────────────────────────
+  if (intent === "CHAT") {
+    const topic  = detectChatTopic(rawText);
+    const isLong = rawText.trim().length > 40;
+    const r      = isLong ? getTopicDeepResponse(topic) : generateChatReply(rawText, username);
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
   // ── Belirli komut adı geçiyorsa yardım ver ─────────────────────────────
   {
     const cmdNames = COMMANDS.flatMap((c) => c.names);
@@ -309,17 +386,20 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     }
   }
 
-  // ── Genel sohbet / bilinmiyor ──────────────────────────────────────────
+  // ── Genel sohbet fallback ──────────────────────────────────────────────
   {
-    const prev = lastBotReply(channelId);
-    const isShort = rawText.trim().length < 15;
+    const prev   = lastBotReply(channelId);
+    const isShort = rawText.trim().length < 12;
     let r: string;
 
     if (isShort && prev) {
-      // Kısa yanıt: önceki cevabın devamı gibi davran
       r = `Hmm... Yani "${rawText.trim()}" mi? Biraz daha açar mısın?`;
     } else {
-      r = unknownReply();
+      // Sohbet konusu varsa ona göre cevap ver, yoksa unknown
+      const topic = detectChatTopic(rawText);
+      r = topic !== "GENERAL"
+        ? generateChatReply(rawText, username)
+        : unknownReply();
     }
 
     await send(message, r);

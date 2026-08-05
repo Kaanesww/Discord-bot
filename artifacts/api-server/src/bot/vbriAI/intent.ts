@@ -16,6 +16,9 @@ export type Intent =
   | "MATH"
   | "JOKE_REQUEST"
   | "SERVER_QUESTION"
+  | "OWO_TEAM"
+  | "OWO_GENERAL"
+  | "CHAT"
   | "CASUAL";
 
 interface IntentRule {
@@ -108,6 +111,38 @@ const RULES: IntentRule[] = [
   {
     intent: "SERVER_QUESTION",
     keywords: ["bu sunucu", "vivincy nedir", "vivincy ne", "sunucu hakkında", "burası ne", "bu ne"],
+  },
+  // OwO bot — takım / strateji
+  {
+    intent: "OWO_TEAM",
+    keywords: [
+      "owo takım", "owo team", "owo kompo", "owo kompozisyon", "owo battle takım",
+      "en iyi owo", "owo en iyi hayvan", "owo hayvan öner", "owo tier", "owo savaş",
+      "owo battle", "owo için takım", "owo tavsiye", "owo strateji",
+      "hangi hayvan owo", "owo gleipnir", "owo phoenix", "owo dragon",
+      "owo rank", "owo upgrade", "owo gem",
+    ],
+    weight: 3,
+  },
+  // OwO bot — genel bilgi
+  {
+    intent: "OWO_GENERAL",
+    keywords: [
+      "owo hunt", "owo farm", "owo nasıl", "owo ne yapayım", "owo sistem",
+      "owo silah", "owo skill", "owo weapon", "owo zoo", "owo daily",
+      "owo checklist", "owo coin", "owo cowonol",
+    ],
+    weight: 2.5,
+  },
+  // Genel sohbet (doğal dil)
+  {
+    intent: "CHAT",
+    keywords: [
+      "ne düşünüyorsun", "sence", "anlat", "biliyor musun", "duymuş muydun",
+      "ne yapıyorsun", "nasıl gidiyor", "iyi misin", "naber kanka",
+      "bored", "sıkıldım", "canım sıkılıyor", "seninle konuşayım",
+    ],
+    weight: 1,
   },
 ];
 
