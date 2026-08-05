@@ -18,6 +18,10 @@ export type Intent =
   | "SERVER_QUESTION"
   | "OWO_TEAM"
   | "OWO_GENERAL"
+  | "LEARN"
+  | "RECALL"
+  | "FORGET"
+  | "WEB_FETCH"
   | "CHAT"
   | "CASUAL";
 
@@ -143,6 +147,44 @@ const RULES: IntentRule[] = [
       "bored", "sıkıldım", "canım sıkılıyor", "seninle konuşayım",
     ],
     weight: 1,
+  },
+  // Öğrenme (kullanıcı bilgi öğretiyor)
+  {
+    intent: "LEARN",
+    keywords: [
+      "öğren:", "bunu bil:", "hatırla:", "not al:", "kaydet:",
+      "bilgi ekle:", "bunu öğren:", "şunu öğren:", "learn:", "remember:",
+      "öğren ", "bunu bil ", "hatırla ", "not al ", "kaydet ",
+    ],
+    weight: 4,
+  },
+  // Hatırlama (ne bildiğini soruyor)
+  {
+    intent: "RECALL",
+    keywords: [
+      "ne biliyorsun", "ne öğrendin", "hatırlıyor musun", "ne not aldın",
+      "notların neler", "ne kaydettin", "öğrendiklerin neler", "bilgilerin neler",
+    ],
+    weight: 3,
+  },
+  // Unutma
+  {
+    intent: "FORGET",
+    keywords: [
+      "her şeyi unut", "notları sil", "öğrendiklerini sil",
+      "hafızayı temizle", "bellekten sil",
+    ],
+    weight: 4,
+  },
+  // Web fetch
+  {
+    intent: "WEB_FETCH",
+    keywords: [
+      "bu siteye bak", "sitesine bak", "bu linki aç", "url'e bak", "url'den bak",
+      "web'de ara", "bu sayfayı getir", "linki getir", "siteyi oku",
+      "bu sayfayı öğren", "bu siteyi öğren", "web'den öğren",
+    ],
+    weight: 3,
   },
 ];
 

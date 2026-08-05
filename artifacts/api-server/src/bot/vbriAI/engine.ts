@@ -26,6 +26,11 @@ import {
   OWO_WEAPONS, OWO_SKILLS, OWO_GEMS, OWO_HUNTING, OWO_STATS,
 } from "./owoKnowledge";
 import { generateChatReply, detectChatTopic, getTopicDeepResponse } from "./chatKnowledge";
+import {
+  detectLearnIntent, handleLearn, handleRecallAll, handleForget,
+  getRelevantMemories, prependMemories, learnFromWeb,
+} from "./learn";
+import { fetchWebPage, extractUrl, containsUrl, formatFetchResult } from "./webFetch";
 
 // ── Cooldown ────────────────────────────────────────────────────────────────
 
@@ -125,6 +130,73 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
   const lower = rawText.toLowerCase().trim();
 
   addTurn(channelId, "user", rawText);
+
+  // ── Öğrenme / Hatırlama / Unutma — öncelikli kontrol ──────────────────
+  {
+    const ld = detectLearnIntent(rawText);
+
+    if (ld.intent === "LEARN") {
+      await message.channel.sendTyping().catch(() => null);
+      const r = await handleLearn(message, ld.content);
+      await send(message, r);
+      addTurn(channelId, "bot", r);
+      return;
+    }
+
+    if (ld.intent === "RECALL_ALL") {
+      await message.channel.sendTyping().catch(() => null);
+      const r = await handleRecallAll(message);
+      await send(message, r);
+      addTurn(channelId, "bot", r);
+      return;
+    }
+
+    if (ld.intent === "FORGET") {
+      await message.channel.sendTyping().catch(() => null);
+      const r = await handleForget(message);
+      await send(message, r);
+      addTurn(channelId, "bot", r);
+      return;
+    }
+
+    if (ld.intent === "WEB_LEARN") {
+      const url = extractUrl(rawText);
+      if (url) {
+        await message.channel.sendTyping().catch(() => null);
+        await send(message, `🌐 Sayfayı getiriyorum: \`${url}\` — bir saniye...`);
+        const result = await fetchWebPage(url);
+        if (result.ok && result.content) {
+          await learnFromWeb(message, url, result.title, result.content);
+          const formatted = formatFetchResult(result, result.content);
+          await send(message, formatted);
+        } else {
+          await send(message, formatFetchResult(result));
+        }
+        addTurn(channelId, "bot", `[Web içeriği öğrenildi: ${url}]`);
+        return;
+      }
+    }
+  }
+
+  // ── Web Fetch — URL tespit ─────────────────────────────────────────────
+  // Eğer kullanıcı URL gönderip "bak", "getir", "oku" diyorsa
+  if (
+    containsUrl(rawText) &&
+    /\b(bak|getir|oku|aç|incele|öğren|kaydet|anlat)\b/.test(lower)
+  ) {
+    const url = extractUrl(rawText)!;
+    await message.channel.sendTyping().catch(() => null);
+    await send(message, `🌐 Sayfa getiriliyor: \`${url}\`...`);
+    const result = await fetchWebPage(url);
+    const saveToMemory = /öğren|kaydet/.test(lower) && result.ok;
+    if (saveToMemory && result.content) {
+      await learnFromWeb(message, url, result.title, result.content);
+    }
+    const r = formatFetchResult(result, saveToMemory ? result.content : undefined);
+    await send(message, r);
+    addTurn(channelId, "bot", r.slice(0, 200));
+    return;
+  }
 
   // ── Komut tarihi temizleme ──────────────────────────────────────────────
   if (/geçmişi\s*(temizle|sıfırla)|sohbeti\s*unut/.test(lower)) {
@@ -363,11 +435,61 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     return;
   }
 
+  // ── LEARN / RECALL / FORGET / WEB_FETCH intent'leri (fallback) ──────────
+  if (intent === "LEARN") {
+    // "öğren X" şeklinde intent'e yakalandı ama detectLearnIntent'i atladı
+    // Extract edilebilir içerik varsa öğren
+    const colonIdx = rawText.indexOf(":");
+    const content  = colonIdx !== -1 ? rawText.slice(colonIdx + 1).trim() : rawText.trim();
+    const r = await handleLearn(message, content);
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  if (intent === "RECALL") {
+    const r = await handleRecallAll(message);
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  if (intent === "FORGET") {
+    const r = await handleForget(message);
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
+  if (intent === "WEB_FETCH") {
+    const url = extractUrl(rawText);
+    if (url) {
+      await message.channel.sendTyping().catch(() => null);
+      await send(message, `🌐 Sayfa getiriliyor: \`${url}\`...`);
+      const result = await fetchWebPage(url);
+      const doLearn = /öğren|kaydet/.test(lower) && result.ok;
+      if (doLearn && result.content) {
+        await learnFromWeb(message, url, result.title, result.content);
+      }
+      const r = formatFetchResult(result, doLearn ? result.content : undefined);
+      await send(message, r);
+      addTurn(channelId, "bot", r.slice(0, 200));
+      return;
+    }
+    const r = "Hangi URL'yi getireyim? Bir link paylaş veya `https://...` yaz.";
+    await send(message, r);
+    addTurn(channelId, "bot", r);
+    return;
+  }
+
   // ── Genel Sohbet (CHAT intent veya belirsiz) ───────────────────────────
   if (intent === "CHAT") {
+    // Hafızada alakalı bilgi var mı bak
+    const memories = await getRelevantMemories(message, rawText).catch(() => [] as string[]);
     const topic  = detectChatTopic(rawText);
     const isLong = rawText.trim().length > 40;
-    const r      = isLong ? getTopicDeepResponse(topic) : generateChatReply(rawText, username);
+    const base   = isLong ? getTopicDeepResponse(topic) : generateChatReply(rawText, username);
+    const r      = prependMemories(memories, base);
     await send(message, r);
     addTurn(channelId, "bot", r);
     return;
@@ -386,21 +508,24 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     }
   }
 
-  // ── Genel sohbet fallback ──────────────────────────────────────────────
+  // ── Genel sohbet fallback — hafıza + konu tespiti ─────────────────────
   {
-    const prev   = lastBotReply(channelId);
+    const prev    = lastBotReply(channelId);
     const isShort = rawText.trim().length < 12;
-    let r: string;
+    let base: string;
 
     if (isShort && prev) {
-      r = `Hmm... Yani "${rawText.trim()}" mi? Biraz daha açar mısın?`;
+      base = `Hmm... Yani "${rawText.trim()}" mi? Biraz daha açar mısın?`;
     } else {
-      // Sohbet konusu varsa ona göre cevap ver, yoksa unknown
       const topic = detectChatTopic(rawText);
-      r = topic !== "GENERAL"
+      base = topic !== "GENERAL"
         ? generateChatReply(rawText, username)
         : unknownReply();
     }
+
+    // Hafızadan alakalı bilgi var mı kontrol et
+    const memories = await getRelevantMemories(message, rawText).catch(() => [] as string[]);
+    const r = prependMemories(memories, base);
 
     await send(message, r);
     addTurn(channelId, "bot", r);
