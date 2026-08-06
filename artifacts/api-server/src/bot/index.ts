@@ -58,6 +58,7 @@ import {
   syncGuildTagRoles,
   removeManagedRoleFromGuild,
 } from "./tagRole";
+import { getRemoteModChannel, setRemoteModChannel, removeRemoteModChannel } from "./remoteMod";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
 let COIN = "🪙"; // fallback, uygulama emojisi yüklenince güncellenir
@@ -888,6 +889,284 @@ async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
     logger.error({ err }, "Mesaj gönderme hatası");
     await m.reply(`❌ Mesaj gönderilemedi: ${(err as Error).message}`);
   }
+}
+
+// ── UZAK MODERASYon ───────────────────────────────────────────────────────────
+// v!uzakmod <alt-komut> [sunucuID] [userID] [...]
+// Sadece bot sahibi kullanabilir.
+
+async function sendRemoteLog(client: import("discord.js").Client, guildId: string, text: string): Promise<void> {
+  try {
+    const channelId = await getRemoteModChannel(guildId);
+    if (!channelId) return;
+    const ch = await client.channels.fetch(channelId).catch(() => null);
+    if (ch?.isTextBased()) await (ch as TextChannel).send(text);
+  } catch { /**/ }
+}
+
+async function pfxUzakMod(m: Message, args: string[]): Promise<void> {
+  // Sadece bot sahibi
+  if (!isOwner(m.author.id)) {
+    await m.reply("❌ Bu komutu yalnızca **bot sahibi** kullanabilir.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase() ?? "";
+
+  // ── Yardım / boş ──────────────────────────────────────────────────────────
+  if (!sub || sub === "yardım" || sub === "yardim" || sub === "help") {
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("🌐 Uzak Moderasyon — Komutlar")
+      .setDescription("Başka sunucularda moderasyon işlemi yapmanı sağlar.\nTüm komutlar yalnızca **bot sahibine** açıktır.")
+      .addFields(
+        { name: "`v!uzakmod setup <sunucuID>`", value: "Hedef sunucuda uzak-mod log kanalı oluşturur.", inline: false },
+        { name: "`v!uzakmod sil <sunucuID>`", value: "Log kanalı kaydını siler.", inline: false },
+        { name: "`v!uzakmod sunucular`", value: "Botun bulunduğu sunucuları listeler.", inline: false },
+        { name: "`v!uzakmod kick <sunucuID> <userID> [sebep]`", value: "Kullanıcıyı hedef sunucudan atar.", inline: false },
+        { name: "`v!uzakmod ban <sunucuID> <userID> [sebep]`", value: "Kullanıcıyı hedef sunucuda yasaklar.", inline: false },
+        { name: "`v!uzakmod unban <sunucuID> <userID> [sebep]`", value: "Yasağı kaldırır.", inline: false },
+        { name: "`v!uzakmod warn <sunucuID> <userID> <sebep>`", value: "Kullanıcıyı uyarır ve DM atar.", inline: false },
+        { name: "`v!uzakmod timeout <sunucuID> <userID> <süre> [sebep]`", value: "Kullanıcıyı susturur. Süre: `10m`, `1sa`, `2g`", inline: false },
+        { name: "`v!uzakmod sicil <sunucuID> <userID>`", value: "Kullanıcının o sunucudaki moderasyon geçmişi.", inline: false },
+      )
+      .setFooter({ text: "Bot sahibine özel • Tüm işlemler log kanalına kaydedilir" });
+    await m.reply({ embeds: [embed] });
+    return;
+  }
+
+  // ── Sunucu listesi ─────────────────────────────────────────────────────────
+  if (sub === "sunucular" || sub === "list") {
+    const guilds = [...m.client.guilds.cache.values()];
+    const lines = guilds.map((g, i) => `\`${i + 1}.\` **${g.name}** — \`${g.id}\` (${g.memberCount} üye)`).join("\n");
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(`🌐 Bot — ${guilds.length} Sunucu`)
+      .setDescription(lines.slice(0, 4000) || "Sunucu yok")
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
+    return;
+  }
+
+  // ── Setup: hedef sunucuda log kanalı oluştur ───────────────────────────────
+  if (sub === "setup" || sub === "kur") {
+    const guildId = args[1];
+    if (!guildId) { await m.reply("❌ Kullanım: `v!uzakmod setup <sunucuID>`"); return; }
+
+    const targetGuild = m.client.guilds.cache.get(guildId)
+      ?? await m.client.guilds.fetch(guildId).catch(() => null);
+    if (!targetGuild) { await m.reply("❌ Sunucu bulunamadı veya bot o sunucuda değil."); return; }
+
+    // Mevcut kanal var mı?
+    const existing = await getRemoteModChannel(guildId);
+    if (existing) {
+      const ch = await m.client.channels.fetch(existing).catch(() => null);
+      if (ch) {
+        await m.reply(`⚠️ **${targetGuild.name}** için zaten bir log kanalı var: <#${existing}>\nSilmek için: \`v!uzakmod sil ${guildId}\``);
+        return;
+      }
+    }
+
+    // Kanal oluştur
+    try {
+      const logCh = await targetGuild.channels.create({
+        name: "🔧・uzak-mod-log",
+        type: ChannelType.GuildText,
+        topic: "Bot sahibi tarafından uzaktan yapılan moderasyon işlemleri bu kanala kaydedilir.",
+        permissionOverwrites: [
+          { id: targetGuild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel] },
+        ],
+      });
+      await setRemoteModChannel(guildId, logCh.id);
+      await logCh.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle("🌐 Uzak Moderasyon Log Kanalı Kuruldu")
+            .setDescription("Bu kanal, bot sahibinin bu sunucuda uzaktan yaptığı moderasyon işlemlerini kayıt altına almak için oluşturulmuştur.")
+            .setTimestamp(),
+        ],
+      });
+      await m.reply(`✅ **${targetGuild.name}** sunucusunda uzak-mod log kanalı oluşturuldu: \`#${logCh.name}\``);
+    } catch (err) {
+      await m.reply(`❌ Kanal oluşturulamadı: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  // ── Sil: log kanalı kaydını kaldır ────────────────────────────────────────
+  if (sub === "sil" || sub === "kaldır" || sub === "kaldir") {
+    const guildId = args[1];
+    if (!guildId) { await m.reply("❌ Kullanım: `v!uzakmod sil <sunucuID>`"); return; }
+    await removeRemoteModChannel(guildId);
+    await m.reply(`✅ \`${guildId}\` için uzak-mod log kanalı kaydı silindi.`);
+    return;
+  }
+
+  // ── Sicil (moderasyon geçmişi) ─────────────────────────────────────────────
+  if (sub === "sicil" || sub === "logs" || sub === "geçmiş" || sub === "gecmis") {
+    const guildId = args[1];
+    const userId = args[2];
+    if (!guildId || !userId) { await m.reply("❌ Kullanım: `v!uzakmod sicil <sunucuID> <userID>`"); return; }
+
+    const targetGuild = m.client.guilds.cache.get(guildId)
+      ?? await m.client.guilds.fetch(guildId).catch(() => null);
+    if (!targetGuild) { await m.reply("❌ Sunucu bulunamadı."); return; }
+
+    const targetUser = await m.client.users.fetch(userId).catch(() => null);
+    const logs = await getUserLogs(userId, guildId);
+
+    if (logs.length === 0) {
+      await m.reply(`✅ **${targetUser?.tag ?? userId}** kullanıcısının **${targetGuild.name}** sunucusunda moderasyon kaydı yok.`);
+      return;
+    }
+
+    const active = logs.filter((l) => l.active);
+    const lines = logs.slice(0, 15).map((l) =>
+      `\`#${l.id}\` ${l.action === "warn" ? "⚠️" : l.action === "kick" ? "👢" : l.action === "ban" ? "🔨" : l.action === "timeout" ? "🔇" : "✅"} **${l.action.toUpperCase()}** — ${l.reason ?? "Sebep yok"} ${l.active ? "" : "~~(pasif)~~"}`
+    ).join("\n");
+
+    const embed = new EmbedBuilder()
+      .setColor(0xfaa61a)
+      .setTitle(`📋 Sicil — ${targetUser?.tag ?? userId}`)
+      .setDescription(lines)
+      .addFields({ name: "Sunucu", value: targetGuild.name, inline: true }, { name: "Toplam", value: `${logs.length} kayıt (${active.length} aktif)`, inline: true })
+      .setThumbnail(targetUser?.displayAvatarURL({ extension: "png", size: 128 }) ?? null)
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
+    return;
+  }
+
+  // ── Ortak: sunucuID ve userID al ─────────────────────────────────────────
+  const targetGuildId = args[1];
+  const targetUserId  = args[2];
+  if (!targetGuildId || !targetUserId) {
+    await m.reply(`❌ Kullanım: \`v!uzakmod ${sub} <sunucuID> <userID> [ek-argümanlar]\``);
+    return;
+  }
+
+  const targetGuild = m.client.guilds.cache.get(targetGuildId)
+    ?? await m.client.guilds.fetch(targetGuildId).catch(() => null);
+  if (!targetGuild) { await m.reply("❌ Sunucu bulunamadı veya bot o sunucuda değil."); return; }
+
+  const targetUser = await m.client.users.fetch(targetUserId).catch(() => null);
+  if (!targetUser) { await m.reply("❌ Kullanıcı bulunamadı."); return; }
+
+  // ── KICK ──────────────────────────────────────────────────────────────────
+  if (sub === "kick" || sub === "at") {
+    const sebep = args.slice(3).join(" ") || "Uzak moderasyon — sebep belirtilmedi";
+    try {
+      const member = await targetGuild.members.fetch(targetUserId).catch(() => null);
+      if (!member) { await m.reply("❌ Kullanıcı o sunucuda bulunamadı."); return; }
+      await member.kick(sebep);
+      const log = await logAction({ guildId: targetGuildId, userId: targetUserId, moderatorId: m.author.id, action: "kick", reason: sebep });
+      const line = `👢 **UZAK KICK** | <@${targetUserId}> (${targetUser.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`;
+      await sendRemoteLog(m.client, targetGuildId, line);
+      await m.reply(`✅ **${targetUser.tag}**, **${targetGuild.name}** sunucusundan atıldı.\n> Sebep: ${sebep}`);
+    } catch (err) {
+      await m.reply(`❌ Kick başarısız: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  // ── BAN ───────────────────────────────────────────────────────────────────
+  if (sub === "ban" || sub === "yasakla") {
+    const sebep = args.slice(3).join(" ") || "Uzak moderasyon — sebep belirtilmedi";
+    try {
+      await targetGuild.bans.create(targetUserId, { reason: `${m.author.tag}: ${sebep}` });
+      const log = await logAction({ guildId: targetGuildId, userId: targetUserId, moderatorId: m.author.id, action: "ban", reason: sebep });
+      const line = `🔨 **UZAK BAN** | <@${targetUserId}> (${targetUser.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`;
+      await sendRemoteLog(m.client, targetGuildId, line);
+      await m.reply(`✅ **${targetUser.tag}**, **${targetGuild.name}** sunucusunda yasaklandı.\n> Sebep: ${sebep}`);
+    } catch (err) {
+      await m.reply(`❌ Ban başarısız: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  // ── UNBAN ─────────────────────────────────────────────────────────────────
+  if (sub === "unban" || sub === "yasakkaldır" || sub === "yasakkaldir") {
+    const sebep = args.slice(3).join(" ") || "Uzak moderasyon — yasak kaldırıldı";
+    try {
+      await targetGuild.bans.remove(targetUserId, `${m.author.tag}: ${sebep}`);
+      const log = await logAction({ guildId: targetGuildId, userId: targetUserId, moderatorId: m.author.id, action: "unban", reason: sebep });
+      const line = `✅ **UZAK UNBAN** | <@${targetUserId}> (${targetUser.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`;
+      await sendRemoteLog(m.client, targetGuildId, line);
+      await m.reply(`✅ **${targetUser.tag}** için **${targetGuild.name}** sunucusundaki yasak kaldırıldı.`);
+    } catch (err) {
+      await m.reply(`❌ Unban başarısız: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  // ── WARN ──────────────────────────────────────────────────────────────────
+  if (sub === "warn" || sub === "uyar") {
+    const sebep = args.slice(3).join(" ");
+    if (!sebep) { await m.reply("❌ Kullanım: `v!uzakmod warn <sunucuID> <userID> <sebep>`"); return; }
+
+    const log = await logAction({ guildId: targetGuildId, userId: targetUserId, moderatorId: m.author.id, action: "warn", reason: sebep });
+    const allWarns = (await getUserLogs(targetUserId, targetGuildId)).filter((l) => l.action === "warn" && l.active);
+
+    // Warn kartı oluştur
+    let warnBuf: Buffer | null = null;
+    try {
+      warnBuf = await generateWarnCard({
+        username: targetUser.displayName,
+        avatarUrl: targetUser.displayAvatarURL({ extension: "png", size: 256 }),
+        moderatorName: m.author.displayName,
+        reason: sebep,
+        warnId: log.id,
+        totalWarns: allWarns.length,
+        guildName: targetGuild.name,
+      });
+    } catch { /**/ }
+
+    // DM gönder
+    try {
+      if (warnBuf) {
+        await targetUser.send({
+          content: `⚠️ **${targetGuild.name}** sunucusunda uyarı aldın!\n**Sebep:** ${sebep} | **ID:** #${log.id}`,
+          files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
+        });
+      } else {
+        await targetUser.send(`⚠️ **${targetGuild.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`);
+      }
+    } catch { /**/ }
+
+    const line = `⚠️ **UZAK WARN** | <@${targetUserId}> (${targetUser.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`;
+    await sendRemoteLog(m.client, targetGuildId, line);
+
+    if (warnBuf) {
+      await m.reply({ content: `✅ **${targetUser.tag}** uyarıldı (DM gönderildi). | **${targetGuild.name}** | #${log.id}`, files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })] });
+    } else {
+      await m.reply(`✅ **${targetUser.tag}** uyarıldı. | **${targetGuild.name}** | #${log.id}`);
+    }
+    return;
+  }
+
+  // ── TIMEOUT ───────────────────────────────────────────────────────────────
+  if (sub === "timeout" || sub === "sustur") {
+    const durationStr = args[3];
+    if (!durationStr) { await m.reply("❌ Kullanım: `v!uzakmod timeout <sunucuID> <userID> <süre> [sebep]`\nÖrn: `10m`, `1sa`, `2g`"); return; }
+    const ms = parseDuration(durationStr);
+    if (!ms || ms < 1000 || ms > 28 * 24 * 60 * 60 * 1000) { await m.reply("❌ Geçersiz süre. Min: 1sn, Maks: 28g."); return; }
+    const sebep = args.slice(4).join(" ") || "Uzak moderasyon — sebep belirtilmedi";
+
+    try {
+      const member = await targetGuild.members.fetch(targetUserId).catch(() => null);
+      if (!member) { await m.reply("❌ Kullanıcı o sunucuda bulunamadı."); return; }
+      await member.timeout(ms, sebep);
+      const log = await logAction({ guildId: targetGuildId, userId: targetUserId, moderatorId: m.author.id, action: "timeout", reason: sebep, duration: ms });
+      const line = `🔇 **UZAK TIMEOUT** | <@${targetUserId}> (${targetUser.tag}) | Süre: ${durationStr} | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`;
+      await sendRemoteLog(m.client, targetGuildId, line);
+      await m.reply(`✅ **${targetUser.tag}**, **${targetGuild.name}** sunucusunda **${durationStr}** susturuldu.\n> Sebep: ${sebep}`);
+    } catch (err) {
+      await m.reply(`❌ Timeout başarısız: ${(err as Error).message}`);
+    }
+    return;
+  }
+
+  await m.reply(`❌ Bilinmeyen alt komut: \`${sub}\`\nYardım için: \`v!uzakmod yardım\``);
 }
 
 // ── SUNUCU MESAJ ──────────────────────────────────────────────────────────────
@@ -2915,6 +3194,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   mesajat: pfxMesajAt, duyuru: pfxMesajAt, announce: pfxMesajAt, say: pfxMesajAt,
   // Başka sunucuya mesaj gönder (sadece bot sahibi)
   sunucumesaj: pfxSunucuMesaj, smesaj: pfxSunucuMesaj, crossmsg: pfxSunucuMesaj,
+  // Uzak moderasyon (sadece bot sahibi)
+  uzakmod: pfxUzakMod, remotemed: pfxUzakMod, rmod: pfxUzakMod,
   // ── Medya paylaşım (v!paylaş) ────────────────────────────────────────────────
   "paylaş": async (m) => { await sendMediaRequest(m); },
   paylas:   async (m) => { await sendMediaRequest(m); },
