@@ -890,6 +890,152 @@ async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
   }
 }
 
+// ── SUNUCU MESAJ ──────────────────────────────────────────────────────────────
+// v!sunucumesaj <sunucuID> <kanalID> <mesaj>
+// Bot sahibine özel: başka bir sunucunun kanalına mesaj gönderir. Onay butonlu.
+
+async function pfxSunucuMesaj(m: Message, args: string[]): Promise<void> {
+  // Sadece bot sahibi kullanabilir
+  if (!isOwner(m.author.id)) {
+    await m.reply("❌ Bu komutu yalnızca **bot sahibi** kullanabilir.");
+    return;
+  }
+
+  // Kullanım: v!sunucumesaj <sunucuID> <kanalID> <mesaj...>
+  if (args.length < 3) {
+    await m.reply(
+      "❌ **Kullanım:**\n" +
+      "`v!sunucumesaj <sunucuID> <kanalID> <mesaj>` — Belirtilen sunucunun kanalına mesaj gönderir\n" +
+      "`v!sunucumesaj <sunucuID> <kanalID> embed <Başlık|Açıklama>` — Embed gönderir\n\n" +
+      "**Örnek:**\n" +
+      "`v!sunucumesaj 1234567890 9876543210 Merhaba!`\n" +
+      "`v!sunucumesaj 1234567890 9876543210 embed Başlık|Açıklama metni`"
+    );
+    return;
+  }
+
+  const targetGuildId = args[0]!;
+  const targetChannelId = args[1]!;
+  const isEmbed = args[2]?.toLowerCase() === "embed";
+  const messageText = isEmbed ? args.slice(3).join(" ").trim() : args.slice(2).join(" ").trim();
+
+  if (!messageText) {
+    await m.reply("❌ Gönderilecek mesaj boş olamaz.");
+    return;
+  }
+
+  // Hedef sunucu ve kanalı bul
+  const targetGuild = m.client.guilds.cache.get(targetGuildId)
+    ?? await m.client.guilds.fetch(targetGuildId).catch(() => null);
+
+  if (!targetGuild) {
+    await m.reply(`❌ **${targetGuildId}** ID'li sunucu bulunamadı veya bot o sunucuda değil.`);
+    return;
+  }
+
+  const targetChannel = targetGuild.channels.cache.get(targetChannelId)
+    ?? await targetGuild.channels.fetch(targetChannelId).catch(() => null);
+
+  if (!targetChannel || !(targetChannel instanceof TextChannel)) {
+    await m.reply(`❌ **${targetChannelId}** ID'li kanal bulunamadı veya yazı kanalı değil.`);
+    return;
+  }
+
+  // Önizleme embed'i oluştur
+  const previewEmbed = new EmbedBuilder()
+    .setColor(0xf0a500)
+    .setTitle("📤 Sunucuya Mesaj Onayı")
+    .addFields(
+      { name: "🏠 Hedef Sunucu", value: `**${targetGuild.name}** (\`${targetGuild.id}\`)`, inline: false },
+      { name: "📢 Hedef Kanal", value: `**#${targetChannel.name}** (\`${targetChannel.id}\`)`, inline: false },
+      { name: "💬 Mesaj Türü", value: isEmbed ? "Embed" : "Normal Metin", inline: true },
+      { name: "📝 İçerik", value: `\`\`\`${messageText.slice(0, 900)}\`\`\``, inline: false },
+    )
+    .setFooter({ text: "Bu mesajı göndermek istiyor musun?" })
+    .setTimestamp();
+
+  // Onay butonları
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`smesaj_onayla_${m.id}`)
+      .setLabel("✅ Gönder")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`smesaj_iptal_${m.id}`)
+      .setLabel("❌ İptal")
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  const confirmMsg = await m.reply({ embeds: [previewEmbed], components: [row] });
+
+  // Buton dinleyici — sadece komut sahibi basabilir, 60 saniye timeout
+  const collector = confirmMsg.createMessageComponentCollector({
+    filter: (i) => i.user.id === m.author.id && (i.customId === `smesaj_onayla_${m.id}` || i.customId === `smesaj_iptal_${m.id}`),
+    time: 60_000,
+    max: 1,
+  });
+
+  collector.on("collect", async (interaction) => {
+    await interaction.deferUpdate().catch(() => null);
+
+    if (interaction.customId === `smesaj_iptal_${m.id}`) {
+      const cancelEmbed = new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle("❌ İptal Edildi")
+        .setDescription("Mesaj gönderme işlemi iptal edildi.");
+      await confirmMsg.edit({ embeds: [cancelEmbed], components: [] }).catch(() => null);
+      return;
+    }
+
+    // Gönder
+    try {
+      if (isEmbed) {
+        const pipeIdx = messageText.indexOf("|");
+        const title = pipeIdx !== -1 ? messageText.slice(0, pipeIdx).trim() : null;
+        const description = pipeIdx !== -1 ? messageText.slice(pipeIdx + 1).trim() : messageText;
+
+        const sendEmbed = new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setDescription(description)
+          .setTimestamp();
+        if (title) sendEmbed.setTitle(title);
+
+        await (targetChannel as TextChannel).send({ embeds: [sendEmbed] });
+      } else {
+        await (targetChannel as TextChannel).send(messageText);
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setColor(0x57f287)
+        .setTitle("✅ Mesaj Gönderildi")
+        .addFields(
+          { name: "Sunucu", value: `${targetGuild.name}`, inline: true },
+          { name: "Kanal", value: `#${targetChannel.name}`, inline: true },
+        )
+        .setTimestamp();
+
+      await confirmMsg.edit({ embeds: [successEmbed], components: [] }).catch(() => null);
+    } catch (err) {
+      logger.error({ err }, "Sunucu mesaj gönderme hatası");
+      const errEmbed = new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle("❌ Gönderilemedi")
+        .setDescription(`Hata: ${(err as Error).message}`);
+      await confirmMsg.edit({ embeds: [errEmbed], components: [] }).catch(() => null);
+    }
+  });
+
+  collector.on("end", async (collected) => {
+    if (collected.size === 0) {
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(0x99aab5)
+        .setTitle("⏱️ Zaman Aşımı")
+        .setDescription("60 saniye içinde yanıt verilmediği için işlem iptal edildi.");
+      await confirmMsg.edit({ embeds: [timeoutEmbed], components: [] }).catch(() => null);
+    }
+  });
+}
+
 // ── KATEGORİ AÇ ───────────────────────────────────────────────────────────────
 // v!kategoriac <isim> [#kanal1 #kanal2 ...]
 // Kategori oluşturur; mention'lı kanalları o kategoriye taşır.
@@ -2767,6 +2913,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
   // Kanala mesaj gönder
   mesajat: pfxMesajAt, duyuru: pfxMesajAt, announce: pfxMesajAt, say: pfxMesajAt,
+  // Başka sunucuya mesaj gönder (sadece bot sahibi)
+  sunucumesaj: pfxSunucuMesaj, smesaj: pfxSunucuMesaj, crossmsg: pfxSunucuMesaj,
   // ── Medya paylaşım (v!paylaş) ────────────────────────────────────────────────
   "paylaş": async (m) => { await sendMediaRequest(m); },
   paylas:   async (m) => { await sendMediaRequest(m); },
