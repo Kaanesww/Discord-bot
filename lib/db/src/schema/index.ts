@@ -12,3 +12,4 @@ export * from "./videoRequestSettings";
 export * from "./tagRoleSettings";
 export * from "./autoRoleSettings";
 export * from "./remoteModSettings";
+export * from "./remoteModAuthorized";

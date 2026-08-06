@@ -59,6 +59,7 @@ import {
   removeManagedRoleFromGuild,
 } from "./tagRole";
 import { getRemoteModChannel, setRemoteModChannel, removeRemoteModChannel } from "./remoteMod";
+import { addRemoteModAuth, removeRemoteModAuth, isRemoteModAuthorized, listRemoteModAuth } from "./remoteModAuth";
 
 // ── Vivincy coin emoji (startup'ta register edilir) ───────────────────────────
 let COIN = "🪙"; // fallback, uygulama emojisi yüklenince güncellenir
@@ -891,6 +892,38 @@ async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
   }
 }
 
+// ── BOT OTOMATİK YÖNETİCİ ROLÜ ───────────────────────────────────────────────
+// Bot her sunucuda kendine Administrator rolü oluşturur ve atar.
+
+async function ensureBotAdminRole(guild: import("discord.js").Guild): Promise<void> {
+  try {
+    const botMember = await guild.members.fetchMe().catch(() => null);
+    if (!botMember) return;
+
+    // Zaten Administrator yetkisi var mı?
+    if (botMember.permissions.has(PermissionFlagsBits.Administrator)) return;
+
+    const roleName = "Bot Yöneticisi";
+    let adminRole = guild.roles.cache.find((r) => r.name === roleName);
+
+    if (!adminRole) {
+      adminRole = await guild.roles.create({
+        name: roleName,
+        permissions: [PermissionFlagsBits.Administrator],
+        color: 0x5865f2,
+        hoist: false,
+        reason: "Bot otomatik yönetici rolü",
+      });
+      logger.info({ guildId: guild.id, roleId: adminRole.id }, "Bot yönetici rolü oluşturuldu");
+    }
+
+    await botMember.roles.add(adminRole, "Bot otomatik yönetici rolü ataması");
+    logger.info({ guildId: guild.id, roleId: adminRole.id }, "Bot yönetici rolü atandı");
+  } catch (err) {
+    logger.warn({ err, guildId: guild.id }, "ensureBotAdminRole başarısız");
+  }
+}
+
 // ── UZAK MODERASYon ───────────────────────────────────────────────────────────
 // v!uzakmod <alt-komut> [sunucuID] [userID] [...]
 // Sadece bot sahibi kullanabilir.
@@ -905,33 +938,101 @@ async function sendRemoteLog(client: import("discord.js").Client, guildId: strin
 }
 
 async function pfxUzakMod(m: Message, args: string[]): Promise<void> {
-  // Sadece bot sahibi
-  if (!isOwner(m.author.id)) {
-    await m.reply("❌ Bu komutu yalnızca **bot sahibi** kullanabilir.");
+  const owner = isOwner(m.author.id);
+  const authorized = owner || await isRemoteModAuthorized(m.author.id);
+
+  const sub = args[0]?.toLowerCase() ?? "";
+
+  // Yetki yönetimi alt komutları sadece bot sahibine açık
+  const ownerOnlySubs = new Set(["yetki", "setup", "kur", "sil", "kaldır", "kaldir", "sunucular", "list"]);
+  if (ownerOnlySubs.has(sub) && !owner) {
+    await m.reply("❌ Bu alt komutu yalnızca **bot sahibi** kullanabilir.");
     return;
   }
 
-  const sub = args[0]?.toLowerCase() ?? "";
+  // Diğer komutlar: owner veya yetkili kullanıcı
+  if (!authorized) {
+    await m.reply("❌ Bu komutu kullanma yetkin yok. Bot sahibinden yetki talep et.");
+    return;
+  }
 
   // ── Yardım / boş ──────────────────────────────────────────────────────────
   if (!sub || sub === "yardım" || sub === "yardim" || sub === "help") {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle("🌐 Uzak Moderasyon — Komutlar")
-      .setDescription("Başka sunucularda moderasyon işlemi yapmanı sağlar.\nTüm komutlar yalnızca **bot sahibine** açıktır.")
+      .setDescription("Başka sunucularda moderasyon işlemi yapmanı sağlar.")
       .addFields(
-        { name: "`v!uzakmod setup <sunucuID>`", value: "Hedef sunucuda uzak-mod log kanalı oluşturur.", inline: false },
-        { name: "`v!uzakmod sil <sunucuID>`", value: "Log kanalı kaydını siler.", inline: false },
-        { name: "`v!uzakmod sunucular`", value: "Botun bulunduğu sunucuları listeler.", inline: false },
-        { name: "`v!uzakmod kick <sunucuID> <userID> [sebep]`", value: "Kullanıcıyı hedef sunucudan atar.", inline: false },
-        { name: "`v!uzakmod ban <sunucuID> <userID> [sebep]`", value: "Kullanıcıyı hedef sunucuda yasaklar.", inline: false },
-        { name: "`v!uzakmod unban <sunucuID> <userID> [sebep]`", value: "Yasağı kaldırır.", inline: false },
-        { name: "`v!uzakmod warn <sunucuID> <userID> <sebep>`", value: "Kullanıcıyı uyarır ve DM atar.", inline: false },
-        { name: "`v!uzakmod timeout <sunucuID> <userID> <süre> [sebep]`", value: "Kullanıcıyı susturur. Süre: `10m`, `1sa`, `2g`", inline: false },
-        { name: "`v!uzakmod sicil <sunucuID> <userID>`", value: "Kullanıcının o sunucudaki moderasyon geçmişi.", inline: false },
+        { name: "🔧 Kurulum (bot sahibi)", value: [
+          "`v!uzakmod setup <sunucuID>` — Log kanalı oluşturur",
+          "`v!uzakmod sil <sunucuID>` — Log kaydını siler",
+          "`v!uzakmod sunucular` — Bot'un bulunduğu sunucular",
+          "`v!uzakmod yetki ekle <userID>` — Yetkili ekler",
+          "`v!uzakmod yetki kaldır <userID>` — Yetkiyi alır",
+          "`v!uzakmod yetki liste` — Yetkilileri listeler",
+        ].join("\n"), inline: false },
+        { name: "⚖️ Moderasyon (yetkili + bot sahibi)", value: [
+          "`v!uzakmod kick <sunucuID> <userID> [sebep]`",
+          "`v!uzakmod ban <sunucuID> <userID> [sebep]`",
+          "`v!uzakmod unban <sunucuID> <userID> [sebep]`",
+          "`v!uzakmod warn <sunucuID> <userID> <sebep>`",
+          "`v!uzakmod timeout <sunucuID> <userID> <süre> [sebep]`",
+          "`v!uzakmod sicil <sunucuID> <userID>`",
+        ].join("\n"), inline: false },
       )
-      .setFooter({ text: "Bot sahibine özel • Tüm işlemler log kanalına kaydedilir" });
+      .setFooter({ text: "Tüm işlemler log kanalına kaydedilir" });
     await m.reply({ embeds: [embed] });
+    return;
+  }
+
+  // ── Yetki yönetimi ────────────────────────────────────────────────────────
+  if (sub === "yetki") {
+    const yetSub = args[1]?.toLowerCase() ?? "";
+
+    if (yetSub === "ekle" || yetSub === "add") {
+      const userId = args[2];
+      if (!userId) { await m.reply("❌ Kullanım: `v!uzakmod yetki ekle <userID>`"); return; }
+      const user = await m.client.users.fetch(userId).catch(() => null);
+      if (!user) { await m.reply("❌ Kullanıcı bulunamadı."); return; }
+      await addRemoteModAuth(userId, m.author.id);
+      await m.reply(`✅ **${user.tag}** uzak moderasyon yetkisi verildi.`);
+      return;
+    }
+
+    if (yetSub === "kaldır" || yetSub === "kaldir" || yetSub === "sil" || yetSub === "remove") {
+      const userId = args[2];
+      if (!userId) { await m.reply("❌ Kullanım: `v!uzakmod yetki kaldır <userID>`"); return; }
+      const removed = await removeRemoteModAuth(userId);
+      const user = await m.client.users.fetch(userId).catch(() => null);
+      await m.reply(removed
+        ? `✅ **${user?.tag ?? userId}** uzak moderasyon yetkisi kaldırıldı.`
+        : `⚠️ **${user?.tag ?? userId}** zaten yetkili listesinde değildi.`
+      );
+      return;
+    }
+
+    if (yetSub === "liste" || yetSub === "list" || !yetSub) {
+      const list = await listRemoteModAuth();
+      if (list.length === 0) {
+        await m.reply("📋 Yetkili listesi boş. `v!uzakmod yetki ekle <userID>` ile ekleyebilirsin.");
+        return;
+      }
+      const lines = await Promise.all(
+        list.map(async (e) => {
+          const u = await m.client.users.fetch(e.userId).catch(() => null);
+          return `• **${u?.tag ?? e.userId}** (\`${e.userId}\`)`;
+        })
+      );
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(`👥 Uzak Mod Yetkilileri — ${list.length} kişi`)
+        .setDescription(lines.join("\n"))
+        .setTimestamp();
+      await m.reply({ embeds: [embed] });
+      return;
+    }
+
+    await m.reply("❌ Kullanım: `v!uzakmod yetki ekle/kaldır/liste`");
     return;
   }
 
@@ -3399,6 +3500,21 @@ export async function startBot(): Promise<void> {
         logger.warn({ err, guildId: guild.id }, "Etiket rolleri başlangıçta senkronize edilemedi"),
       );
     }
+
+    // ── Bot otomatik yönetici rolü (tüm sunucular) ────────────────────────────
+    for (const guild of c.guilds.cache.values()) {
+      ensureBotAdminRole(guild).catch((err) =>
+        logger.warn({ err, guildId: guild.id }, "Otomatik yönetici rolü atanamadı"),
+      );
+    }
+  });
+
+  // ── Bot yeni sunucuya katıldığında otomatik admin rolü ────────────────────
+  client.on(Events.GuildCreate, async (guild) => {
+    logger.info({ guildId: guild.id, guildName: guild.name }, "Yeni sunucuya katıldı");
+    await ensureBotAdminRole(guild).catch((err) =>
+      logger.warn({ err, guildId: guild.id }, "GuildCreate: otomatik admin rolü atanamadı"),
+    );
   });
 
   // Kullanıcı sunucu etiketini etkinleştirdiğinde/kaldırdığında tetiklenir.
