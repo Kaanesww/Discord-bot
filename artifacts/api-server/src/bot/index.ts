@@ -559,6 +559,168 @@ async function pfxAc(m: Message): Promise<void> {
   await sendModLog(m, m.guildId, `🔓 **Kanal Kilidi Açıldı** | <#${m.channel.id}> | Mod: <@${m.author.id}>`);
 }
 
+// ── EMOJİ EKLE ────────────────────────────────────────────────────────────────
+async function pfxEmojiEkle(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has(PermissionFlagsBits.ManageGuildExpressions) && !m.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    await m.reply("❌ **Manage Expressions** iznin yok."); return;
+  }
+
+  const sub = args[0]?.toLowerCase() ?? "";
+
+  // liste
+  if (sub === "liste" || sub === "list") {
+    const emojis = [...m.guild.emojis.cache.values()];
+    if (emojis.length === 0) { await m.reply("📭 Sunucuda özel emoji yok."); return; }
+    const lines = emojis.map((e) => `${e.animated ? "(GIF) " : ""}${e} \`:${e.name}:\``);
+    const chunks: string[] = [];
+    let cur = `📋 **Sunucu Emojileri** (${emojis.length})\n`;
+    for (const l of lines) {
+      if ((cur + l + "\n").length > 1900) { chunks.push(cur); cur = ""; }
+      cur += l + "\n";
+    }
+    if (cur) chunks.push(cur);
+    for (const chunk of chunks) await m.channel.send(chunk);
+    return;
+  }
+
+  // sil
+  if (sub === "sil" || sub === "kaldir") {
+    const name = args[1]?.replace(/:/g, "");
+    if (!name) { await m.reply("❌ Kullanım: `v!emojiekle sil <emoji-ismi>`"); return; }
+    const emoji = m.guild.emojis.cache.find((e) => e.name === name);
+    if (!emoji) { await m.reply(`❌ \`:${name}:\` emojisi bulunamadı.`); return; }
+    await emoji.delete("Bot komutuyla silindi");
+    await m.reply(`✅ \`:${name}:\` emojisi silindi.`);
+    return;
+  }
+
+  // Ekleme: v!emojiekle <url-veya-ek> [isim]
+  // URL ile
+  let imageSource: string | Buffer | null = null;
+  let emojiName: string | null = null;
+
+  const attachment = m.attachments.first();
+  if (attachment) {
+    // Ek dosyadan
+    const res = await fetch(attachment.url).catch(() => null);
+    if (!res?.ok) { await m.reply("❌ Dosya indirilemedi."); return; }
+    imageSource = Buffer.from(await res.arrayBuffer());
+    emojiName = (args[0] ?? attachment.name.split(".")[0] ?? "emoji").replace(/[^a-zA-Z0-9_]/g, "").slice(0, 32);
+  } else if (args[0]?.startsWith("http")) {
+    imageSource = args[0];
+    emojiName = (args[1] ?? "emoji").replace(/[^a-zA-Z0-9_]/g, "").slice(0, 32);
+  } else {
+    await m.reply(
+      "❌ **Kullanım:**\n" +
+      "`v!emojiekle <url> <isim>` — URL'den emoji ekle\n" +
+      "`v!emojiekle <isim>` + dosya ek — Ek dosyadan emoji ekle\n" +
+      "`v!emojiekle liste` — Sunucu emojilerini listele\n" +
+      "`v!emojiekle sil <isim>` — Emojiyi sil"
+    );
+    return;
+  }
+
+  if (emojiName.length < 2) { await m.reply("❌ Emoji ismi en az 2 karakter olmalı."); return; }
+
+  try {
+    const emoji = await m.guild.emojis.create({ attachment: imageSource as any, name: emojiName, reason: `v!emojiekle — ${m.author.tag}` });
+    await m.reply(`✅ ${emoji} \`:${emoji.name}:\` emojisi eklendi!`);
+  } catch (err: any) {
+    const msg: string = err?.message ?? "";
+    if (msg.includes("File cannot be larger")) await m.reply("❌ Dosya çok büyük. Emoji maks **256 KB** olabilir.");
+    else if (msg.includes("Maximum number")) await m.reply("❌ Sunucu emoji limiti doldu.");
+    else await m.reply(`❌ Emoji eklenemedi: ${msg}`);
+  }
+}
+
+// ── SES KANALI ────────────────────────────────────────────────────────────────
+async function pfxSesKanal(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member) return;
+  const isAdmin = m.member.permissions.has(PermissionFlagsBits.Administrator);
+  const hasManage = m.member.permissions.has(PermissionFlagsBits.ManageChannels);
+  if (!isOwner(m.author.id) && !isAdmin && !hasManage) {
+    await m.reply("❌ **Kanalları Yönet** iznin yok."); return;
+  }
+
+  const sub = args[0]?.toLowerCase() ?? "";
+
+  // yardım / boş
+  if (!sub || sub === "yardim" || sub === "help") {
+    await m.reply(
+      "🔊 **Ses Kanalı Komutları**\n" +
+      "`v!seskanal <isim>` — Ses kanalı oluştur\n" +
+      "`v!seskanal <isim> <limit>` — Kullanıcı limitiyle oluştur (1-99)\n" +
+      "`v!seskanal <isim> <limit> <bitrate>` — Bitrate de belirt (8-384 kbps)\n" +
+      "`v!seskanal sil <#kanal>` — Ses kanalını sil\n" +
+      "`v!seskanal yeniden <#kanal> <yeni-isim>` — Kanalı yeniden adlandır\n" +
+      "`v!seskanal limit <#kanal> <limit>` — Kullanıcı limitini değiştir"
+    );
+    return;
+  }
+
+  // sil
+  if (sub === "sil" || sub === "delete") {
+    const ch = m.mentions.channels.first();
+    if (!ch || ch.type !== ChannelType.GuildVoice) { await m.reply("❌ Geçerli bir ses kanalı etiketle."); return; }
+    await ch.delete("v!seskanal sil komutu");
+    await m.reply(`✅ **${ch.name}** ses kanalı silindi.`);
+    return;
+  }
+
+  // yeniden adlandır
+  if (sub === "yeniden" || sub === "rename" || sub === "isim") {
+    const ch = m.mentions.channels.first();
+    if (!ch || ch.type !== ChannelType.GuildVoice) { await m.reply("❌ Geçerli bir ses kanalı etiketle."); return; }
+    const newName = args.slice(2).join(" ").trim();
+    if (!newName) { await m.reply("❌ Yeni isim gir."); return; }
+    await ch.setName(newName);
+    await m.reply(`✅ Ses kanalı **${newName}** olarak yeniden adlandırıldı.`);
+    return;
+  }
+
+  // kullanıcı limitini değiştir
+  if (sub === "limit") {
+    const ch = m.mentions.channels.first();
+    if (!ch || ch.type !== ChannelType.GuildVoice) { await m.reply("❌ Geçerli bir ses kanalı etiketle."); return; }
+    const lim = parseInt(args[2] ?? "0", 10);
+    if (isNaN(lim) || lim < 0 || lim > 99) { await m.reply("❌ Limit 0-99 arasında olmalı (0 = sınırsız)."); return; }
+    await (ch as any).setUserLimit(lim);
+    await m.reply(`✅ Kullanıcı limiti **${lim === 0 ? "sınırsız" : lim}** olarak ayarlandı.`);
+    return;
+  }
+
+  // Oluştur: v!seskanal <isim> [limit] [bitrate]
+  const channelName = sub.replace(/[^a-z0-9ğüşıöç\-_ ]/gi, "").slice(0, 100).trim();
+  if (!channelName || channelName.length < 2) { await m.reply("❌ Geçerli bir kanal ismi gir (en az 2 karakter)."); return; }
+
+  const userLimit = parseInt(args[1] ?? "0", 10);
+  const bitrateKbps = parseInt(args[2] ?? "64", 10);
+
+  const limitVal   = isNaN(userLimit) || userLimit < 0 || userLimit > 99  ? 0   : userLimit;
+  const bitrateVal = isNaN(bitrateKbps) || bitrateKbps < 8 || bitrateKbps > 384 ? 64000 : bitrateKbps * 1000;
+
+  const parentId = m.channel instanceof TextChannel ? m.channel.parentId ?? undefined : undefined;
+
+  try {
+    const ch = await m.guild.channels.create({
+      name:      channelName,
+      type:      ChannelType.GuildVoice,
+      userLimit: limitVal,
+      bitrate:   bitrateVal,
+      parent:    parentId,
+      reason:    `v!seskanal — ${m.author.tag}`,
+    });
+    await m.reply(
+      `✅ 🔊 **${ch.name}** ses kanalı oluşturuldu!\n` +
+      `👥 Limit: **${limitVal === 0 ? "Sınırsız" : limitVal}** | ` +
+      `📶 Bitrate: **${bitrateVal / 1000} kbps**`
+    );
+  } catch (err: any) {
+    await m.reply(`❌ Ses kanalı oluşturulamadı: ${(err as Error).message}`);
+  }
+}
+
 // ── KANAL AÇ ──────────────────────────────────────────────────────────────────
 
 async function pfxKanalAc(m: Message, args: string[]): Promise<void> {
@@ -2586,6 +2748,10 @@ const prefixHandlers: Record<string, PfxHandler> = {
   guilddesc: (m, a) => pfxSunucuAciklama(m, a),
   // Otorol
   otorol: pfxOtorol, autorol: pfxOtorol, autorole: pfxOtorol,
+  // Emoji ekle
+  emojiekle: pfxEmojiEkle, emojiadd: pfxEmojiEkle, addEmoji: pfxEmojiEkle,
+  // Ses kanalı
+  seskanal: (m, a) => pfxSesKanal(m, a), seskanalac: (m, a) => pfxSesKanal(m, a), voicechannel: (m, a) => pfxSesKanal(m, a), vc: (m, a) => pfxSesKanal(m, a),
   userinfo: (m) => pfxUserinfo(m), kullanicibilgi: (m) => pfxUserinfo(m), uinfo: (m) => pfxUserinfo(m),
   ping: (m) => pfxPing(m),
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
