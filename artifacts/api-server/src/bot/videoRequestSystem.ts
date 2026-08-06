@@ -21,6 +21,7 @@ import { db } from "@workspace/db";
 import { videoRequestSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
+import { applyWatermark } from "./watermark";
 
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
@@ -470,17 +471,30 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
-    // ── Davet linki sol üst köşede belirgin şekilde gözükecek biçimde ────────
-    // Discord'da content (metin), embed ve dosyalardan ÖNCE gösterilir
-    // Büyük bold + link formatı ile sol üstte yeterince dikkat çekici olur
-    const contentText = inviteUrl
-      ? `\`╔══════════════════════╗\`\n\`║\` 🔗 **${interaction.guild.name}** → **${inviteUrl}**\n\`╚══════════════════════╝\``
-      : undefined;
+    // ── Watermark: davet linki doğrudan dosyanın içine basılır ───────────────
+    // Metin yok ise dosyalar olduğu gibi gönderilir
+    const wmLabel = inviteUrl
+      ? (inviteUrl.replace(/^https?:\/\//, "")) // "discord.gg/xxx" kısa format
+      : null;
+
+    let finalFiles: { buffer: Buffer; name: string }[];
+
+    if (wmLabel) {
+      finalFiles = await Promise.all(
+        req.files.map((f) =>
+          applyWatermark(f.buffer, f.name, f.isVideo, wmLabel).catch((err) => {
+            logger.warn({ err, file: f.name }, "Watermark uygulanamadı, orijinal gönderilecek");
+            return { buffer: f.buffer, name: f.name };
+          })
+        )
+      );
+    } else {
+      finalFiles = req.files.map((f) => ({ buffer: f.buffer, name: f.name }));
+    }
 
     await targetChannel.send({
-      content: contentText,
       embeds: req.description ? [contentEmbed] : [],
-      files:  req.files.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
+      files:  finalFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
 
     // Mod mesajını güncelle
