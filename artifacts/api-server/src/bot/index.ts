@@ -48,6 +48,7 @@ import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "
 import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl } from "./videoRequestSystem";
 
 import { generateWarnCard } from "./warnCard";
+import { applyAutoRoles, getAutoRoles, getAllAutoRoles, addAutoRole, removeAutoRole, toggleAutoRole, clearAutoRoles } from "./autoRole";
 import { AuditLogEvent, type GuildMember } from "discord.js";
 import {
   getTagRoleSettings,
@@ -1755,6 +1756,217 @@ async function pfxSunucuKopyala(m: Message, args: string[]): Promise<void> {
   await status.edit(`✅ **Kopyalama tamamlandı!** Kaynak: **${sourceGuild.name}** | Oluşturulan: **${created}** öğe`);
 }
 
+// ── ROL KOPYALA ───────────────────────────────────────────────────────────────
+async function pfxRolKopya(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
+    await m.reply("❌ **Administrator** iznin yok."); return;
+  }
+  const sourceId = args[0]?.trim();
+  if (!sourceId) {
+    await m.reply("❌ Kullanım: `v!rolkopya <kaynak-sunucu-id>`\nBot o sunucuda da bulunmalıdır.");
+    return;
+  }
+  const sourceGuild = m.client.guilds.cache.get(sourceId);
+  if (!sourceGuild) { await m.reply("❌ Bot bu sunucuda değil ya da ID hatalı."); return; }
+  if (sourceGuild.id === m.guildId) { await m.reply("❌ Aynı sunucudan kopyalayamazsın."); return; }
+
+  const status = await m.reply("⏳ Roller kopyalanıyor...");
+  const sleep  = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  // @everyone ve yönetilen (bot) rolleri hariç, pozisyona göre küçükten büyüğe
+  const roles = [...sourceGuild.roles.cache.values()]
+    .filter((r) => r.id !== sourceGuild.id && !r.managed)
+    .sort((a, b) => a.position - b.position);
+
+  const hasRoleIcons = m.guild.features.includes("ROLE_ICONS" as any);
+  let created = 0, failed = 0;
+
+  for (const role of roles) {
+    try {
+      let iconData: Buffer | string | undefined;
+
+      // İkon kopyalama — yalnızca hedef sunucu Rol İkonu özelliğine sahipse
+      if (hasRoleIcons && role.icon) {
+        const iconUrl = role.iconURL({ size: 64 });
+        if (iconUrl) {
+          const res = await fetch(iconUrl).catch(() => null);
+          if (res?.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            iconData = `data:image/png;base64,${buf.toString("base64")}`;
+          }
+        }
+      }
+
+      await m.guild.roles.create({
+        name:         role.name,
+        color:        role.color,
+        hoist:        role.hoist,
+        mentionable:  role.mentionable,
+        permissions:  role.permissions,
+        ...(iconData ? { icon: iconData } : {}),
+        reason:       `v!rolkopya — Kaynak: ${sourceGuild.name}`,
+      });
+      created++;
+    } catch { failed++; }
+    await sleep(350); // Rate limit önlemi
+  }
+
+  await status.edit(
+    `✅ **Rol kopyalama tamamlandı!**\n` +
+    `📦 Kaynak: **${sourceGuild.name}** | ` +
+    `✅ Oluşturulan: **${created}** | ` +
+    `❌ Başarısız: **${failed}**\n` +
+    (hasRoleIcons ? "" : "ℹ️ Bu sunucunun Rol İkonu özelliği yok (Boost 2 gerekir) — ikonlar kopyalanmadı.")
+  );
+}
+
+// ── SUNUCU AÇIKLAMASI DÜZENLE ─────────────────────────────────────────────────
+async function pfxSunucuAciklama(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member) return;
+  if (!isOwner(m.author.id) && m.guild.ownerId !== m.author.id && !m.member.permissions.has("ManageGuild")) {
+    await m.reply("❌ **Manage Server** iznin yok."); return;
+  }
+  if (!m.guild.features.includes("COMMUNITY" as any)) {
+    await m.reply("❌ Bu komut yalnızca **Topluluk** sunucularında çalışır."); return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+
+  // Kaldır
+  if (sub === "kaldir" || sub === "kaldır" || sub === "sil") {
+    await m.guild.edit({ description: null }).catch(() => null);
+    await m.reply("✅ Sunucu açıklaması kaldırıldı.");
+    return;
+  }
+
+  // Mevcut açıklamayı göster
+  if (!sub || sub === "durum" || sub === "goster" || sub === "göster") {
+    const desc = m.guild.description;
+    await m.reply(desc
+      ? `📝 **Mevcut Sunucu Açıklaması:**\n>>> ${desc}`
+      : "📝 Sunucunun açıklaması yok.\n💡 Ayarlamak için: `v!sunucuaciklama <metin>`"
+    );
+    return;
+  }
+
+  // Yeni açıklama ayarla (tüm args birleştir)
+  const newDesc = args.join(" ").trim();
+  if (newDesc.length > 120) {
+    await m.reply(`❌ Açıklama en fazla **120 karakter** olabilir. (${newDesc.length}/120)`); return;
+  }
+
+  try {
+    await m.guild.edit({ description: newDesc });
+    await m.reply(`✅ Sunucu açıklaması güncellendi:\n>>> ${newDesc}`);
+  } catch (err) {
+    await m.reply(`❌ Açıklama güncellenemedi: ${(err as Error).message}`);
+  }
+}
+
+// ── OTOROL ────────────────────────────────────────────────────────────────────
+async function pfxOtorol(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member || !m.guildId) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageRoles")) {
+    await m.reply("❌ **Manage Roles** iznin yok."); return;
+  }
+
+  const sub  = args[0]?.toLowerCase() ?? "";
+  const gid  = m.guildId;
+
+  // ── durum ──────────────────────────────────────────────────────────────────
+  if (!sub || sub === "durum" || sub === "liste" || sub === "list") {
+    const rows = await getAllAutoRoles(gid);
+    if (rows.length === 0) {
+      await m.reply(
+        "📋 **Otorol Sistemi** — Henüz rol eklenmemiş.\n\n" +
+        "**Kullanım:**\n" +
+        "`v!otorol ekle @rol` — Tüm üyelere ver\n" +
+        "`v!otorol ekle @rol insan` — Yalnızca insanlara ver\n" +
+        "`v!otorol ekle @rol bot` — Yalnızca botlara ver\n" +
+        "`v!otorol ekle @rol insan 7` — En az 7 günlük hesaplara ver\n" +
+        "`v!otorol kaldir @rol` — Rolü otorol listesinden çıkar\n" +
+        "`v!otorol durdur @rol` — Rolü geçici devre dışı bırak\n" +
+        "`v!otorol baslat @rol` — Rolü yeniden etkinleştir\n" +
+        "`v!otorol temizle` — Tüm otorolleri sil"
+      );
+      return;
+    }
+
+    const lines = rows.map((r) => {
+      const role   = m.guild!.roles.cache.get(r.roleId);
+      const name   = role ? `<@&${r.roleId}>` : `~~${r.roleId}~~ (silinmiş)`;
+      const target = r.target === "human" ? "👤 İnsan" : r.target === "bot" ? "🤖 Bot" : "👥 Hepsi";
+      const age    = r.minAccountAgeDays > 0 ? ` | min ${r.minAccountAgeDays} gün` : "";
+      const status = r.enabled ? "🟢" : "🔴";
+      return `${status} ${name} — ${target}${age}`;
+    });
+    await m.reply(`📋 **Otorol Listesi** (${rows.length} rol)\n${lines.join("\n")}`);
+    return;
+  }
+
+  // ── ekle ──────────────────────────────────────────────────────────────────
+  if (sub === "ekle" || sub === "add") {
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `v!otorol ekle @rol [hepsi|insan|bot] [min-gün]`"); return; }
+    if (role.managed) { await m.reply("❌ Bot yönetimindeki rolleri otorol olarak ekleyemezsin."); return; }
+    if (role.position >= m.guild.members.me!.roles.highest.position) {
+      await m.reply("❌ Bu rol botun en yüksek rolünden yukarıda, atayamam."); return;
+    }
+
+    const targetArg = args[2]?.toLowerCase() ?? "hepsi";
+    const target: "all" | "human" | "bot" =
+      targetArg === "insan" || targetArg === "human" ? "human" :
+      targetArg === "bot"                            ? "bot"   : "all";
+
+    const minDays = parseInt(args[3] ?? "0", 10);
+    const minAccountAgeDays = isNaN(minDays) || minDays < 0 ? 0 : minDays;
+
+    await addAutoRole(gid, role.id, target, minAccountAgeDays);
+
+    const targetLabel = target === "human" ? "👤 Yalnızca insanlar" : target === "bot" ? "🤖 Yalnızca botlar" : "👥 Tüm üyeler";
+    const ageLabel    = minAccountAgeDays > 0 ? ` | En az **${minAccountAgeDays}** günlük hesap` : "";
+    await m.reply(`✅ <@&${role.id}> otorol listesine eklendi!\n${targetLabel}${ageLabel}`);
+    return;
+  }
+
+  // ── kaldır ────────────────────────────────────────────────────────────────
+  if (sub === "kaldir" || sub === "kaldır" || sub === "sil" || sub === "remove") {
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `v!otorol kaldir @rol`"); return; }
+    const removed = await removeAutoRole(gid, role.id);
+    await m.reply(removed ? `✅ <@&${role.id}> otorol listesinden kaldırıldı.` : "❌ Bu rol zaten listede değil.");
+    return;
+  }
+
+  // ── durdur ────────────────────────────────────────────────────────────────
+  if (sub === "durdur" || sub === "devre" || sub === "disable") {
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `v!otorol durdur @rol`"); return; }
+    await toggleAutoRole(gid, role.id, false);
+    await m.reply(`🔴 <@&${role.id}> geçici olarak devre dışı bırakıldı.`);
+    return;
+  }
+
+  // ── başlat ────────────────────────────────────────────────────────────────
+  if (sub === "baslat" || sub === "başlat" || sub === "enable" || sub === "aktif") {
+    const role = m.mentions.roles.first();
+    if (!role) { await m.reply("❌ Kullanım: `v!otorol baslat @rol`"); return; }
+    await toggleAutoRole(gid, role.id, true);
+    await m.reply(`🟢 <@&${role.id}> yeniden etkinleştirildi.`);
+    return;
+  }
+
+  // ── temizle ───────────────────────────────────────────────────────────────
+  if (sub === "temizle" || sub === "sifirla" || sub === "sıfırla" || sub === "clear") {
+    await clearAutoRoles(gid);
+    await m.reply("✅ Tüm otoroller temizlendi.");
+    return;
+  }
+
+  await m.reply("❓ Bilinmeyen alt komut. `v!otorol` yazarak yardıma bakabilirsin.");
+}
+
 async function pfxUserinfo(m: Message): Promise<void> {
   if (!m.guild) return;
   const target = m.mentions.members?.first() ?? m.member;
@@ -2366,6 +2578,14 @@ const prefixHandlers: Record<string, PfxHandler> = {
   setprefix: pfxSetPrefix, prefix: pfxSetPrefix,
   sunucukur: (m) => pfxSunucuKur(m),
   sunucukopyala: pfxSunucuKopyala, skopyala: pfxSunucuKopyala,
+  // Rol kopyalama
+  rolkopya: pfxRolKopya, rolkopyala: pfxRolKopya, copyroles: pfxRolKopya,
+  // Sunucu açıklama düzenleme
+  sunucuaciklama: (m, a) => pfxSunucuAciklama(m, a),
+  sunucuaçıklama: (m, a) => pfxSunucuAciklama(m, a),
+  guilddesc: (m, a) => pfxSunucuAciklama(m, a),
+  // Otorol
+  otorol: pfxOtorol, autorol: pfxOtorol, autorole: pfxOtorol,
   userinfo: (m) => pfxUserinfo(m), kullanicibilgi: (m) => pfxUserinfo(m), uinfo: (m) => pfxUserinfo(m),
   ping: (m) => pfxPing(m),
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
@@ -2700,6 +2920,7 @@ export async function startBot(): Promise<void> {
   client.on(Events.GuildMemberAdd, async (member: GuildMember) => {
     await handleBotJoin(member).catch(() => null);
     await syncMemberTagRole(member).catch(() => null);
+    await applyAutoRoles(member).catch(() => null);
   });
 
   client.on(Events.GuildMemberUpdate, async (_oldMember, newMember) => {

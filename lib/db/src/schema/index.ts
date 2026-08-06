@@ -10,3 +10,4 @@ export * from "./statChannels";
 export * from "./giveaways";
 export * from "./videoRequestSettings";
 export * from "./tagRoleSettings";
+export * from "./autoRoleSettings";
