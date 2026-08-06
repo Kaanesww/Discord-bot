@@ -2410,14 +2410,14 @@ const prefixHandlers: Record<string, PfxHandler> = {
         `📋 **Medya Paylaşım Kurulumu**\n` +
         `> Mod kanalı: ${s.moderationChannelId ? `<#${s.moderationChannelId}>` : "_Ayarlanmamış_"}\n` +
         `> Onay rolleri: ${roleList}\n` +
-        `> Davet linki: ${storedInvite ? `**${storedInvite}**` : "_Ayarlanmamış (otomatik oluşturulur)_"}\n\n` +
+        `> Watermark URL: ${storedInvite ? `**${storedInvite}**` : "_Ayarlanmamış (watermark eklenmez)_"}\n\n` +
         `**Alt komutlar:**\n` +
         `\`v!videosetup #kanal\` — Mod kanalı ayarla\n` +
         `\`v!videosetup kaldir\` — Mod kanalını kaldır\n` +
         `\`v!videosetup onayrol @rol\` — Onay rolü ekle\n` +
         `\`v!videosetup onayrolkaldir @rol\` — Onay rolünü kaldır\n` +
-        `\`v!videosetup davetlink discord.gg/xxx\` — Videolarda gösterilecek davet linkini ayarla\n` +
-        `\`v!videosetup davetlinkkaldır\` — Davet linkini kaldır`
+        `\`v!videosetup davetlink discord.gg/xxx\` — Paylaşılan medyalara watermark olarak eklenecek URL'yi ayarla\n` +
+        `\`v!videosetup davetlinkkaldır\` — Watermark URL'sini kaldır`
       );
       return;
     }

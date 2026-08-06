@@ -21,7 +21,7 @@ import { db } from "@workspace/db";
 import { videoRequestSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
-import { applyWatermark } from "./watermark";
+import { applyImageWatermark, applyVideoWatermark } from "./watermark";
 
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +80,7 @@ export async function getVideoSettings(guildId: string) {
   return {
     moderationChannelId: row?.moderationChannelId ?? null,
     approvalRoles: JSON.parse(row?.approvalRoles ?? "[]") as string[],
+    inviteUrl: row?.inviteUrl ?? null,
   };
 }
 
@@ -471,30 +472,29 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
 
     if (req.description) contentEmbed.setDescription(req.description);
 
-    // ── Watermark: davet linki doğrudan dosyanın içine basılır ───────────────
-    // Metin yok ise dosyalar olduğu gibi gönderilir
-    const wmLabel = inviteUrl
-      ? (inviteUrl.replace(/^https?:\/\//, "")) // "discord.gg/xxx" kısa format
-      : null;
+    // ── Watermark uygula ─────────────────────────────────────────────────────
+    // Tüm dosyalar aynı anda (paralel) işlenir — hiçbiri atlanmaz
+    const watermarkUrl = inviteUrl;
 
-    let finalFiles: { buffer: Buffer; name: string }[];
-
-    if (wmLabel) {
-      finalFiles = await Promise.all(
-        req.files.map((f) =>
-          applyWatermark(f.buffer, f.name, f.isVideo, wmLabel).catch((err) => {
-            logger.warn({ err, file: f.name }, "Watermark uygulanamadı, orijinal gönderilecek");
-            return { buffer: f.buffer, name: f.name };
-          })
-        )
-      );
-    } else {
-      finalFiles = req.files.map((f) => ({ buffer: f.buffer, name: f.name }));
-    }
+    const processedFiles = await Promise.all(
+      req.files.map(async (f) => {
+        if (!watermarkUrl) return { buffer: f.buffer, name: f.name };
+        try {
+          if (f.isVideo) {
+            return await applyVideoWatermark(f.buffer, f.name, watermarkUrl);
+          } else {
+            return await applyImageWatermark(f.buffer, f.name, watermarkUrl);
+          }
+        } catch (err) {
+          logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal gönderiliyor");
+          return { buffer: f.buffer, name: f.name };
+        }
+      }),
+    );
 
     await targetChannel.send({
       embeds: req.description ? [contentEmbed] : [],
-      files:  finalFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
+      files:  processedFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
     });
 
     // Mod mesajını güncelle
