@@ -145,7 +145,7 @@ export async function applyImageWatermark(
     const base = nodePath.basename(filename, ext);
     if (ext === ".jpg" || ext === ".jpeg") {
       return {
-        buffer:  canvas.toBuffer("image/jpeg", { quality: 88 }),
+        buffer:  canvas.toBuffer("image/jpeg", 88),
         name:    filename,           // aynı isim, aynı uzantı
       };
     }

@@ -426,6 +426,56 @@ async function pfxUnban(m: Message, args: string[]): Promise<void> {
   }
 }
 
+async function pfxIdBan(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId || !m.member) return;
+  const perm = await canUseMod(m.member, m.guildId, "ban");
+  if (!perm.ok) { await m.reply(perm.reason ?? "❌ Bu komutu kullanmak için yetkin yok."); return; }
+
+  const userId = (args[0] ?? "").replace(/[<@!>]/g, "");
+  if (!/^\d{15,22}$/.test(userId)) {
+    await m.reply("❌ Kullanım: `idban <kullanıcı-id> [sebep]`");
+    return;
+  }
+  if (userId === m.author.id) { await m.reply("❌ Kendini yasaklayamazsın."); return; }
+  const reason = args.slice(1).join(" ") || "ID ban";
+
+  try {
+    const user = await m.client.users.fetch(userId);
+    await m.guild.bans.create(userId, { reason: `${m.author.tag}: ${reason}` });
+    const log = await logAction({
+      guildId: m.guildId, userId, moderatorId: m.author.id, action: "ban", reason,
+    });
+    await m.reply(`🔨 **${user.tag}** (` + `\`${userId}\`` + `) yasaklandı. Sebep: ${reason}`);
+    await sendModLog(m, m.guildId, `🔨 **ID Ban** | <@${userId}> (${user.tag}) | Mod: <@${m.author.id}> | Sebep: ${reason} | #${log.id}`);
+  } catch (err) {
+    logger.warn({ err, userId }, "ID ban başarısız");
+    await m.reply("❌ Bu ID ile kullanıcı yasaklanamadı. Botun **Ban Members** yetkisini ve rol hiyerarşisini kontrol et.");
+  }
+}
+
+async function pfxGiveRole(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId || !m.member) return;
+  const perm = await canUseMod(m.member, m.guildId, "mod");
+  if (!perm.ok) { await m.reply(perm.reason ?? "❌ Bu komutu kullanmak için yetkin yok."); return; }
+
+  const target = m.mentions.members?.first();
+  const role = m.mentions.roles?.first();
+  if (!target || !role) {
+    await m.reply("❌ Kullanım: `rolver @kullanıcı @rol`");
+    return;
+  }
+  if (role.managed || role.position >= m.guild.members.me!.roles.highest.position) {
+    await m.reply("❌ Bu rol botun en yüksek rolünün altında olmalı ve entegre rol olmamalı.");
+    return;
+  }
+  try {
+    await target.roles.add(role, `${m.author.tag} tarafından verildi`);
+    await m.reply(`✅ ${target} kullanıcısına ${role} rolü verildi.`);
+  } catch {
+    await m.reply("❌ Rol verilemedi. Botun **Manage Roles** yetkisini ve rol hiyerarşisini kontrol et.");
+  }
+}
+
 async function pfxUyariKaldir(m: Message, args: string[]): Promise<void> {
   if (!m.guildId || !m.member) return;
   const perm = await canUseMod(m.member, m.guildId, "warn");
@@ -3155,7 +3205,9 @@ const prefixHandlers: Record<string, PfxHandler> = {
   sicil: (m) => pfxSicil(m),
   // Moderasyon
   ban: pfxBan,
+  idban: pfxIdBan, banid: pfxIdBan,
   kick: pfxKick,
+  rolover: pfxGiveRole, rolver: pfxGiveRole, giverole: pfxGiveRole,
   warn: pfxWarn,
   timeout: pfxTimeout, sustur: pfxTimeout,
   untimeout: pfxUntimeout, unsustur: pfxUntimeout,

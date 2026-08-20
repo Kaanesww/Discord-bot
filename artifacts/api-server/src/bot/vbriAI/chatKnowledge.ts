@@ -168,11 +168,6 @@ const TOPIC_RESPONSES: Record<ChatTopic, string[]> = {
     "Kış mı, yaz mı seversin?",
     "Kar yağıyorsa en iyi oyun günü. Evde otur, Discord'da takıl 😄",
   ],
-  OPINION: [
-    "Fikrin ne hakkında? Anlat, dinliyorum.",
-    "Sana dürüst olayım: ikisi de haklı olabilir. Detay ver.",
-    "Konuya göre değişir. Ne hakkında?",
-  ],
   GENERAL: [
     "Anlıyorum. Devam et, dinliyorum.",
     "İlginç! Daha fazla anlat.",

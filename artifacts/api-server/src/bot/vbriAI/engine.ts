@@ -88,8 +88,8 @@ function buildHelpText(category?: string): string {
     return (
       `**${category} Komutları** (${cmds.length}):\n` +
       cmds.map((c) => `• \`${c.names[0]}\` — ${c.description.split(".")[0]}`).join("\n") +
-      `\n\nDetay için: \`@VBRI ${c.names[0]} ne yapar\` gibi sor.`
-    ).replace("{c.names[0]}", cmds[0]!.names[0]!);
+      `\n\nDetay için: \`@VBRI ${cmds[0]!.names[0]} ne yapar\` gibi sor.`
+    );
   }
 
   const cats = getAllCategories();
