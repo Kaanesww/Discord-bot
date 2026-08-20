@@ -8,7 +8,7 @@ const LUCK_DURATION_MS  = 2 * 60 * 1000; // 2 dakika
 /** Kullanıcının global bakiyesini döndürür. */
 export async function getBalance(userId: string) {
   const rows = await db.select().from(economyTable).where(eq(economyTable.userId, userId)).limit(1);
-  return rows[0] ?? { coins: 0, lastDaily: null, streak: 0, luck: 0, luckExpiresAt: null, prayUsedAt: null };
+  return rows[0] ?? { coins: 0, lastDaily: null, streak: 0, luck: 0, luckExpiresAt: null, prayUsedAt: null, econXp: 0, econLevel: 0 };
 }
 
 export async function setCoins(userId: string, coins: number): Promise<number> {
