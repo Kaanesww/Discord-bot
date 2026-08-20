@@ -26,7 +26,6 @@ import { applyImageWatermark, applyVideoWatermark } from "./watermark";
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
 const MAX_FILE_BYTES  = 95 * 1024 * 1024; // 95 MB tek dosya
-const MAX_TOTAL_BYTES = 95 * 1024 * 1024; // 95 MB toplam
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".avi", ".mkv"]);
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -241,7 +240,6 @@ export async function sendMediaRequest(message: Message): Promise<void> {
 
   // Her dosyayı doğrula
   const invalid: string[] = [];
-  let totalSize = 0;
 
   for (const att of attachments) {
     const kind = checkFileType(att.name, att.contentType);
@@ -254,7 +252,6 @@ export async function sendMediaRequest(message: Message): Promise<void> {
       invalid.push(`\`${att.name}\` — ${mb} MB (maks 95 MB)`);
       continue;
     }
-    totalSize += att.size;
   }
 
   if (invalid.length > 0) {
@@ -262,11 +259,6 @@ export async function sendMediaRequest(message: Message): Promise<void> {
       `❌ Şu dosyalar kabul edilemedi:\n${invalid.map((e) => `• ${e}`).join("\n")}\n\n` +
       `Desteklenen formatlar: MP4, WebM, MOV, AVI, MKV, JPG, PNG, GIF, WEBP`
     );
-    return;
-  }
-
-  if (totalSize > MAX_TOTAL_BYTES) {
-    await message.reply(`❌ Toplam dosya boyutu maks **95 MB** olabilir. Şu an: **${(totalSize / 1024 / 1024).toFixed(2)} MB**`);
     return;
   }
 
