@@ -227,8 +227,33 @@ async function pfxSicil(m: Message): Promise<void> {
   if (!target) { await m.reply("❌ Kullanım: `sicil @kullanici`"); return; }
   try {
     const logs = await getUserLogs(target.id, m.guildId);
-    const buf = await generateSicilCard({ username: target.displayName, avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }), logs });
-    await m.reply({ files: [new AttachmentBuilder(buf, { name: "sicil.png" })] });
+    const counts = {
+      warn: logs.filter((l) => l.action === "warn").length,
+      kick: logs.filter((l) => l.action === "kick").length,
+      ban: logs.filter((l) => l.action === "ban").length,
+      timeout: logs.filter((l) => l.action === "timeout").length,
+    };
+    const recent = logs.slice(0, 8);
+    const embed = new EmbedBuilder()
+      .setColor("#5865f2")
+      .setAuthor({ name: `${target.displayName} — Moderasyon Sicil Kaydı`, iconURL: target.displayAvatarURL({ extension: "png", size: 128 }) })
+      .setThumbnail(target.displayAvatarURL({ extension: "png", size: 256 }))
+      .setDescription(
+        `**Toplam kayıt:** ${logs.length}\n` +
+        `⚠️ Uyarı: **${counts.warn}**  •  👢 Kick: **${counts.kick}**  •  🔨 Ban: **${counts.ban}**  •  🔇 Timeout: **${counts.timeout}**`
+      )
+      .addFields({
+        name: "Son işlemler",
+        value: recent.length
+          ? recent.map((l) =>
+            `${l.action === "warn" ? "⚠️" : l.action === "kick" ? "👢" : l.action === "ban" ? "🔨" : l.action === "timeout" ? "🔇" : "•"} ` +
+            `**#${l.id} ${l.action.toUpperCase()}** — ${l.reason ?? "Sebep belirtilmedi"} · <t:${Math.floor(l.createdAt.getTime() / 1000)}:R>`
+          ).join("\n")
+          : "Bu kullanıcıya ait moderasyon kaydı bulunamadı.",
+      })
+      .setFooter({ text: `${m.guild?.name ?? "Sunucu"} • Yalnızca yetkililer görebilir` })
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
   } catch (err: any) {
     logger.error({ err }, "pfxSicil hata");
     await m.reply(`❌ Sicil kartı oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
@@ -345,37 +370,26 @@ async function pfxWarn(m: Message, args: string[]): Promise<void> {
   const log = await logAction({ guildId: m.guildId, userId: target.id, moderatorId: m.author.id, action: "warn", reason: sebep });
   const allWarns = (await getUserLogs(target.id, m.guildId)).filter((l) => l.action === "warn" && l.active);
 
-  // ── Uyarı kartı oluştur ─────────────────────────────────────────────────
-  let warnBuf: Buffer | null = null;
-  try {
-    warnBuf = await generateWarnCard({
-      username: target.displayName,
-      avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
-      moderatorName: m.author.displayName,
-      reason: sebep,
-      warnId: log.id,
-      totalWarns: allWarns.length,
-      guildName: m.guild?.name ?? "",
-    });
-  } catch { /**/ }
-
-  if (warnBuf) {
-    await m.reply({ files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })] });
-  } else {
-    await m.reply(`⚠️ **${target.username}** uyarıldı. Sebep: ${sebep} | #${log.id}`);
-  }
+  const warnColor = allWarns.length >= 5 ? "#ed4245" : allWarns.length >= 3 ? "#faa61a" : "#57f287";
+  const warnEmbed = new EmbedBuilder()
+    .setColor(warnColor)
+    .setAuthor({ name: "Uyarı Verildi", iconURL: target.displayAvatarURL({ extension: "png", size: 128 }) })
+    .setTitle(`${target.displayName} uyarıldı`)
+    .setThumbnail(target.displayAvatarURL({ extension: "png", size: 256 }))
+    .addFields(
+      { name: "Uyarı ID", value: `#${log.id}`, inline: true },
+      { name: "Toplam aktif uyarı", value: String(allWarns.length), inline: true },
+      { name: "Moderatör", value: `${m.author}`, inline: true },
+      { name: "Sebep", value: sebep.slice(0, 1024), inline: false },
+    )
+    .setFooter({ text: m.guild?.name ?? "Moderasyon" })
+    .setTimestamp();
+  await m.reply({ embeds: [warnEmbed] });
   await sendModLog(m, m.guildId, `⚠️ **Uyarı** | <@${target.id}> (${target.tag}) | Mod: <@${m.author.id}> | Sebep: ${sebep} | #${log.id}`);
 
-  // ── DM — görsel ile ──────────────────────────────────────────────────────
+  // ── DM ────────────────────────────────────────────────────────────────────
   try {
-    if (warnBuf) {
-      await target.send({
-        content: `⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\n**Sebep:** ${sebep} | **ID:** #${log.id}`,
-        files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
-      });
-    } else {
-      await target.send(`⚠️ **${m.guild?.name}** sunucusunda uyarı aldın!\nSebep: ${sebep} | #${log.id}`);
-    }
+    await target.send({ content: `⚠️ ${m.guild?.name ?? "Bir sunucu"} sunucusunda uyarı aldın.`, embeds: [warnEmbed] });
   } catch { /**/ }
 }
 
@@ -2758,12 +2772,54 @@ function buildHelpButtons(): ActionRowBuilder<ButtonBuilder>[] {
   return rows.slice(0, 5);
 }
 
+function buildHelpOverviewEmbed(prefix: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor("#5865f2")
+    .setTitle("📖 VBRI Bot Komut Rehberi")
+    .setDescription(
+      `Toplam **${HELP_CATEGORIES.reduce((sum, cat) => sum + cat.commands.length, 0)} komut** bulunuyor.\n` +
+      `Detayları görmek için aşağıdaki kategori butonlarından birine tıkla. Prefix: \`${prefix}\``
+    )
+    .addFields(HELP_CATEGORIES.map((cat) => ({
+      name: `${cat.icon} ${cat.label} · ${cat.commands.length} komut`,
+      value: cat.commands.slice(0, 5).map((cmd) => `\`${prefix}${cmd.name}\` — ${cmd.desc}`).join("\n") +
+        (cat.commands.length > 5 ? `\n… ve ${cat.commands.length - 5} komut daha` : ""),
+      inline: true,
+    })))
+    .setFooter({ text: "Bir kategori seçerek tüm komutları görüntüle" })
+    .setTimestamp();
+}
+
+function buildHelpCategoryEmbed(prefix: string, catKey: string): EmbedBuilder | null {
+  const cat = HELP_CATEGORIES.find(
+    (item) => item.key === catKey || item.label.toLowerCase() === catKey.toLowerCase()
+  );
+  if (!cat) return null;
+
+  const commandLines = cat.commands.map((cmd) => `\`${prefix}${cmd.name}\` — ${cmd.desc}`);
+  const commandFields = [];
+  for (let i = 0; i < commandLines.length; i += 8) {
+    commandFields.push({
+      name: i === 0 ? "Komutlar" : "Komutlar (devamı)",
+      value: commandLines.slice(i, i + 8).join("\n"),
+    });
+  }
+
+  return new EmbedBuilder()
+    .setColor(cat.color)
+    .setTitle(`${cat.icon} ${cat.label} Komutları`)
+    .setDescription(`Bu kategoride **${cat.commands.length} komut** var. Prefix: \`${prefix}\``)
+    .addFields(commandFields)
+    .setFooter({ text: `Ana yardım menüsüne dönmek için butona tıkla • ${prefix}yardim` })
+    .setTimestamp();
+}
+
 async function pfxYardim(m: Message, args: string[]): Promise<void> {
   const prefix = m.guildId ? await getPrefix(m.guildId).catch(() => "v!") : "v!";
   const catKey = args[0]?.toLowerCase();
   if (catKey) {
-    const buf = await generateCategoryHelpCard(prefix, catKey);
-    if (!buf) {
+    const embed = buildHelpCategoryEmbed(prefix, catKey);
+    if (!embed) {
       await m.reply(`❌ Kategori bulunamadı. Mevcut kategoriler: \`moderasyon\` \`seviye\` \`ekonomi\` \`oyunlar\` \`muzik\` \`yonetim\``);
       return;
     }
@@ -2775,13 +2831,12 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
         .setStyle(ButtonStyle.Primary)
     );
     await m.reply({
-      files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })],
+      embeds: [embed],
       components: [backRow],
     });
   } else {
-    const buf = await generateHelpCard(prefix);
     await m.reply({
-      files: [new AttachmentBuilder(buf, { name: "yardim.png" })],
+      embeds: [buildHelpOverviewEmbed(prefix)],
       components: buildHelpButtons(),
     });
   }
@@ -3652,17 +3707,16 @@ export async function startBot(): Promise<void> {
       : "v!";
 
     if (customId === "help_overview") {
-      const buf = await generateHelpCard(prefix);
       await interaction.update({
-        files: [new AttachmentBuilder(buf, { name: "yardim.png" })],
+        embeds: [buildHelpOverviewEmbed(prefix)],
         components: buildHelpButtons(),
       });
       return;
     }
 
     const catKey = customId.replace("help_cat_", "");
-    const buf = await generateCategoryHelpCard(prefix, catKey);
-    if (!buf) {
+    const embed = buildHelpCategoryEmbed(prefix, catKey);
+    if (!embed) {
       await interaction.update({ content: "❌ Kategori bulunamadı.", components: [] });
       return;
     }
@@ -3674,7 +3728,7 @@ export async function startBot(): Promise<void> {
         .setStyle(ButtonStyle.Primary)
     );
     await interaction.update({
-      files: [new AttachmentBuilder(buf, { name: `yardim-${catKey}.png` })],
+      embeds: [embed],
       components: [backRow],
     });
   });
