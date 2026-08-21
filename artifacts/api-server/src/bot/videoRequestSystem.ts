@@ -80,6 +80,7 @@ export async function getVideoSettings(guildId: string) {
     moderationChannelId: row?.moderationChannelId ?? null,
     approvalRoles: JSON.parse(row?.approvalRoles ?? "[]") as string[],
     inviteUrl: row?.inviteUrl ?? null,
+    showSharerName: row?.showSharerName ?? false,
   };
 }
 
@@ -137,6 +138,16 @@ export async function setInviteUrl(guildId: string, inviteUrl: string | null): P
 
 export async function getInviteUrl(guildId: string): Promise<string | null> {
   return (await getVideoSettings(guildId)).inviteUrl ?? null;
+}
+
+export async function setShowSharerName(guildId: string, enabled: boolean): Promise<void> {
+  await db
+    .insert(videoRequestSettingsTable)
+    .values({ guildId, showSharerName: enabled })
+    .onConflictDoUpdate({
+      target: videoRequestSettingsTable.guildId,
+      set: { showSharerName: enabled, updatedAt: new Date() },
+    });
 }
 
 // ── Yetki kontrolü ────────────────────────────────────────────────────────────
@@ -462,7 +473,13 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
       .setFooter({ text: `${typeLine} • ${totalMB} MB` })
       .setTimestamp();
 
-    if (req.description) contentEmbed.setDescription(req.description);
+    const settings = await getVideoSettings(req.guildId);
+    const sharerName = interaction.guild.members.cache.get(req.requestorId)?.displayName
+      ?? (await interaction.client.users.fetch(req.requestorId).catch(() => null))?.username
+      ?? req.requestorTag.split("#")[0];
+    const shareLine = settings.showSharerName ? `**${sharerName} tarafından paylaşıldı**` : "";
+    const descriptionParts = [shareLine, req.description].filter(Boolean);
+    if (descriptionParts.length > 0) contentEmbed.setDescription(descriptionParts.join("\n\n"));
 
     // ── Watermark uygula ─────────────────────────────────────────────────────
     // Tüm dosyalar aynı anda (paralel) işlenir — hiçbiri atlanmaz

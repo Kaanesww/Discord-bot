@@ -45,7 +45,7 @@ import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin,
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
-import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl } from "./videoRequestSystem";
+import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl, setShowSharerName } from "./videoRequestSystem";
 
 import { generateWarnCard } from "./warnCard";
 import { applyAutoRoles, getAutoRoles, getAllAutoRoles, addAutoRole, removeAutoRole, toggleAutoRole, clearAutoRoles } from "./autoRole";
@@ -3434,13 +3434,31 @@ const prefixHandlers: Record<string, PfxHandler> = {
         `> Mod kanalı: ${s.moderationChannelId ? `<#${s.moderationChannelId}>` : "_Ayarlanmamış_"}\n` +
         `> Onay rolleri: ${roleList}\n` +
         `> Watermark URL: ${storedInvite ? `**${storedInvite}**` : "_Ayarlanmamış (watermark eklenmez)_"}\n\n` +
+        `> Paylaşan adı: ${s.showSharerName ? "✅ Açık" : "❌ Kapalı"}\n\n` +
         `**Alt komutlar:**\n` +
         `\`v!videosetup #kanal\` — Mod kanalı ayarla\n` +
         `\`v!videosetup kaldir\` — Mod kanalını kaldır\n` +
         `\`v!videosetup onayrol @rol\` — Onay rolü ekle\n` +
         `\`v!videosetup onayrolkaldir @rol\` — Onay rolünü kaldır\n` +
         `\`v!videosetup davetlink discord.gg/xxx\` — Paylaşılan medyalara watermark olarak eklenecek URL'yi ayarla\n` +
-        `\`v!videosetup davetlinkkaldır\` — Watermark URL'sini kaldır`
+        `\`v!videosetup davetlinkkaldır\` — Watermark URL'sini kaldır\n` +
+        `\`v!videosetup paylaşanadı aç|kapat\` — Paylaşanın düz adını gösterir/gizler`
+      );
+      return;
+    }
+
+    if (sub === "paylaşanadı" || sub === "paylasanadi" || sub === "paylasan") {
+      const value = args[1]?.toLowerCase();
+      if (!["aç", "ac", "on", "kapat", "kapa", "off"].includes(value ?? "")) {
+        await m.reply("❌ Kullanım: `v!videosetup paylaşanadı aç` veya `v!videosetup paylaşanadı kapat`");
+        return;
+      }
+      const enabled = ["aç", "ac", "on"].includes(value!);
+      await setShowSharerName(gid, enabled);
+      await m.reply(
+        enabled
+          ? "✅ Paylaşan adı açıldı. Onaylanan medyalarda etiket kullanılmadan **KullanıcıAdı tarafından paylaşıldı** yazacak."
+          : "✅ Paylaşan adı kapatıldı. Onaylanan medyalarda paylaşan adı gösterilmeyecek."
       );
       return;
     }

@@ -182,6 +182,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "videosetup onayrolkaldir @rol",      desc: "Onay rolünü kaldırır" },
       { name: "videosetup davetlink discord.gg/x", desc: "Videolarda gösterilecek davet linkini ayarlar" },
       { name: "videosetup davetlinkkaldır",        desc: "Davet linkini kaldırır" },
+      { name: "videosetup paylaşanadı aç|kapat",    desc: "Paylaşanın düz adını gösterir/gizler" },
       { name: "videosetup durum",                  desc: "Mevcut ayarları gösterir" },
     ],
   },
