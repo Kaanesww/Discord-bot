@@ -21,11 +21,13 @@ interface LevelTheme {
 }
 
 function getTheme(level: number): LevelTheme {
-  if (level >= 100) return { bg1: "#1a0005", bg2: "#350010", bg3: "#1a0010", accent: "#ff4466", accent2: "#ff0044", title: "TANRI", titleEmoji: "👑", glowColor: "rgba(255,50,80,0.25)" };
-  if (level >= 50)  return { bg1: "#1a1200", bg2: "#3d2a00", bg3: "#1a1000", accent: "#ffd700", accent2: "#ff8c00", title: "EFSANE", titleEmoji: "⭐", glowColor: "rgba(255,215,0,0.20)" };
-  if (level >= 25)  return { bg1: "#0f0020", bg2: "#220040", bg3: "#0a0018", accent: "#9b59b6", accent2: "#8e44ad", title: "UZMAN", titleEmoji: "💜", glowColor: "rgba(155,89,182,0.20)" };
-  if (level >= 10)  return { bg1: "#001a16", bg2: "#003d30", bg3: "#001210", accent: "#1abc9c", accent2: "#16a085", title: "GELİŞEN", titleEmoji: "💎", glowColor: "rgba(26,188,156,0.18)" };
-  return { bg1: "#0a0a1a", bg2: "#1a1a3e", bg3: "#0a0a2a", accent: "#5865f2", accent2: "#4752c4", title: "ACEMİ", titleEmoji: "🔷", glowColor: "rgba(88,101,242,0.18)" };
+  const titles = level >= 100 ? ["TANRI", "♛"] : level >= 50 ? ["EFSANE", "✦"] : level >= 25 ? ["UZMAN", "◆"] : level >= 10 ? ["GELİŞEN", "◇"] : ["ACEMİ", "•"];
+  return {
+    bg1: "#050505", bg2: "#171717", bg3: "#080808",
+    accent: "#ffffff", accent2: "#8a8a8a",
+    title: titles[0], titleEmoji: titles[1],
+    glowColor: "rgba(255,255,255,0.10)",
+  };
 }
 
 function roundRect(ctx: any, x: number, y: number, w: number, h: number, r: number): void {
@@ -172,11 +174,11 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   // Küçük renkli satırlar: Rank | Level | Mesaj | Ses | Bakiye
   ctx.font = "bold 13px sans-serif";
   const stats: Array<{ label: string; value: string; color: string; coin?: boolean }> = [
-    { label: "🏅 Sıra", value: `#${opts.rank}`, color: "#faa61a" },
+    { label: "Sıra", value: `#${opts.rank}`, color: "#ffffff" },
     { label: "⭐ Seviye", value: String(opts.level), color: accent },
-    { label: "💬 Mesaj", value: opts.messageCount.toLocaleString("tr-TR") + " mesaj", color: "#57f287" },
-    ...(opts.voiceMinutes !== undefined ? [{ label: "🎤 Ses", value: opts.voiceMinutes > 0 ? `${opts.voiceMinutes} dakika` : "0 dakika", color: "#5865f2" } as const] : []),
-    ...(opts.coins !== undefined ? [{ label: "Bakiye", value: opts.coins.toLocaleString("tr-TR"), color: "#ffd700", coin: true } as const] : []),
+    { label: "Mesaj", value: opts.messageCount.toLocaleString("tr-TR") + " mesaj", color: "#d0d0d0" },
+    ...(opts.voiceMinutes !== undefined ? [{ label: "Ses", value: opts.voiceMinutes > 0 ? `${opts.voiceMinutes} dakika` : "0 dakika", color: "#a0a0a0" } as const] : []),
+    ...(opts.coins !== undefined ? [{ label: "Bakiye", value: opts.coins.toLocaleString("tr-TR"), color: "#ffffff", coin: true } as const] : []),
   ];
 
   // İki kolon halinde yan yana
@@ -197,7 +199,7 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
     // Eğer coin ise, özel ikon çiz + değer yaz
     if (s.coin) {
       const iconR = 7;
-      drawCoinIcon(ctx, sx + labelW + iconR + 1, sy - iconR + 2, iconR, "#ffd700");
+      drawCoinIcon(ctx, sx + labelW + iconR + 1, sy - iconR + 2, iconR, "#ffffff");
       ctx.fillStyle = s.color;
       ctx.font = "bold 12px sans-serif";
       ctx.fillText(s.value, sx + labelW + iconR * 2 + 5, sy);
@@ -221,7 +223,7 @@ export async function generateProfileCard(opts: ProfileCardOptions): Promise<Buf
   if (progress > 0) {
     const filled = Math.max(progress * barW, barH);
     const grad = ctx.createLinearGradient(barX, 0, barX+filled, 0);
-    grad.addColorStop(0, accent); grad.addColorStop(1, "#eb459e");
+    grad.addColorStop(0, accent); grad.addColorStop(1, "#707070");
     roundRect(ctx, barX, barY, filled, barH, barH/2);
     ctx.fillStyle = grad; ctx.fill();
     const shine = ctx.createLinearGradient(barX, barY, barX, barY+barH);
