@@ -26,6 +26,7 @@ import { applyImageWatermark, applyVideoWatermark } from "./watermark";
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
 const MAX_FILE_BYTES  = 95 * 1024 * 1024; // 95 MB tek dosya
+const MAX_FILES_PER_UPLOAD = 3; // Discord yüklemelerinde tek isteği küçük tut
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".avi", ".mkv"]);
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -501,10 +502,34 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
       }),
     );
 
-    await targetChannel.send({
-      embeds: req.description ? [contentEmbed] : [],
-      files:  processedFiles.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
-    });
+    // Çok sayıda/büyük dosyayı tek REST isteğine koymak Discord tarafında
+    // 60 saniyelik istek zaman aşımına neden olabiliyor. Küçük partiler hâlinde
+    // gönder; geçici AbortError olursa aynı partiyi bir kez tekrar dene.
+    for (let i = 0; i < processedFiles.length; i += MAX_FILES_PER_UPLOAD) {
+      const batch = processedFiles.slice(i, i + MAX_FILES_PER_UPLOAD);
+      const isFirstBatch = i === 0;
+      let sent = false;
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= 2 && !sent; attempt++) {
+        try {
+          await targetChannel.send({
+            embeds: isFirstBatch && descriptionParts.length > 0 ? [contentEmbed] : [],
+            files: batch.map((f) => new AttachmentBuilder(f.buffer, { name: f.name })),
+          });
+          sent = true;
+        } catch (err) {
+          lastError = err;
+          const isAbort = (err as { name?: string; code?: number })?.name === "AbortError"
+            || (err as { code?: number })?.code === 20;
+          if (!isAbort || attempt === 2) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          logger.warn({ reqId, batch: i / MAX_FILES_PER_UPLOAD + 1 }, "Medya yüklemesi iptal oldu, tekrar deneniyor");
+        }
+      }
+
+      if (!sent && lastError) throw lastError;
+    }
 
     // Mod mesajını güncelle
     await interaction.editReply({
