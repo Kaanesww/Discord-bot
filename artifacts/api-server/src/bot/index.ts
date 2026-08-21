@@ -3836,9 +3836,10 @@ export async function startBot(): Promise<void> {
       }
 
       if (handler) {
-        // Bakım modu kontrolü — bakım ve ai komutları her zaman çalışır, owner'a engel yok
+        // Bakım modu kontrolü — bakımdaki komutlar bot sahibi dahil hiç kimseye açık değildir.
+        // Bakım komutunun kendisi açık kalır ki sahip bakım modunu kaldırabilsin.
         const bypassCmds = new Set(["bakım", "bakim", "bakimmod", "aimod", "aitemizle", "aigeçmiş"]);
-        if (isInMaintenance(resolvedCmd) && !isOwner(message.author.id) && !bypassCmds.has(resolvedCmd)) {
+        if (isInMaintenance(resolvedCmd) && !bypassCmds.has(resolvedCmd)) {
           await message.reply(
             `🔧 **\`${prefix}${resolvedCmd}\`** şu an bakımda, birazdan geri dönecek!\n` +
             `Bakım listesi için: \`${prefix}bakım liste\``
