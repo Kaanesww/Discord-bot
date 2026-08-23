@@ -709,7 +709,6 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     if (!general || general.type !== ChannelType.GuildText) return true;
     const content = message.content.trim().slice(0, 1900);
     if (!content) return true;
-    await message.delete().catch(() => null);
     let generalWebhookId = settings.generalWebhookId;
     let generalWebhookToken = settings.generalWebhookToken;
     if (!generalWebhookId || !generalWebhookToken) {
@@ -728,7 +727,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     if (!privateAccount.webhookToken || privateAccount.webhookToken === "private-channel") return true;
     const generalWebhook = new WebhookClient({ id: generalWebhookId, token: generalWebhookToken });
     const generalMessage = await generalWebhook.send({
-      content: `«${content}»`,
+      content,
       username: privateAccount.displayName,
       avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
@@ -738,13 +737,13 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const recipients: Record<string, string> = {};
     const accounts = await getAnonymousAccounts(message.guildId);
     for (const recipient of accounts) {
-      if (recipient.id === privateAccount.id || !recipient.privateChannelId) continue;
+      if (!recipient.privateChannelId) continue;
       const target = await message.guild!.channels.fetch(recipient.privateChannelId).catch(() => null);
       if (!target || target.type !== ChannelType.GuildText) continue;
       if (!recipient.webhookToken || recipient.webhookToken === "private-channel") continue;
       const copyWebhook = new WebhookClient({ id: recipient.webhookId, token: recipient.webhookToken });
       const copy = await copyWebhook.send({
-        content: `«${content}»`,
+        content,
         username: privateAccount.displayName,
         avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
         allowedMentions: { parse: [] },
