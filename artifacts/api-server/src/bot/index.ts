@@ -3856,6 +3856,7 @@ export async function startBot(): Promise<void> {
 
     // DM: anonim profil, anonim hesaba mesaj ve kara liste işlemleri.
     if (!message.guildId) {
+      logger.info({ userId: message.author.id, messageId: message.id }, "Anonim DM alındı");
       const dmArgs = message.content.trim().split(/\s+/);
       const dmCmd = dmArgs.shift()?.toLowerCase();
       const normalizedDmCmd = dmCmd?.replace(/[()]/g, "");

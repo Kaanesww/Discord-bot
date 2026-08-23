@@ -165,14 +165,14 @@ export async function sendAnonymousMessage(
   const target = await getAnonymousAccountById(targetAccountId);
   if (!target) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
   if (target.userId === senderUserId) return { ok: false, message: "Kendi anonim hesabına mesaj gönderemezsin." };
-  if (await isAnonymousBlocked(target.userId, targetAccountId)) {
-    return { ok: false, message: "Bu anonim hesap, anonim DM'leri kabul etmiyor." };
-  }
 
   const senderProfiles = await getAnonymousProfile(senderUserId);
-  const senderProfile = senderProfiles[0];
+  const senderProfile = senderProfiles.find(p => p.guildId === target.guildId) ?? senderProfiles[0];
   if (!senderProfile) {
     return { ok: false, message: "Önce anonim bir profil oluşturmalısın. Bir sunucunun anonim kanalında ilk mesajını gönderip onayla." };
+  }
+  if (await isAnonymousBlocked(target.userId, senderProfile.id)) {
+    return { ok: false, message: "Bu anonim hesap, anonim DM'leri kabul etmiyor." };
   }
 
   const recipient = await client.users.fetch(target.userId);
@@ -212,6 +212,8 @@ export async function startAnonymousConversation(
       or(
         eq(anonymousSessionsTable.userAId, senderUserId),
         eq(anonymousSessionsTable.userBId, senderUserId),
+        eq(anonymousSessionsTable.userAId, target.userId),
+        eq(anonymousSessionsTable.userBId, target.userId),
       ),
     ));
 
@@ -225,12 +227,22 @@ export async function startAnonymousConversation(
   });
 
   const recipient = await client.users.fetch(target.userId);
-  await recipient.send(
-    `🕵️ **Anonim sohbet başladı**\n` +
-    `Bir kullanıcı senin anonim hesabınla sohbet başlattı.\n` +
-    `Mesajlarını bu DM'ye yaz; bot karşı tarafa anonim olarak iletecek.\n` +
-    `Sohbeti kapatmak için: \`v!konuşmakapat\``,
-  ).catch(() => null);
+  try {
+    await recipient.send(
+      `🕵️ **Anonim sohbet başladı**\n` +
+      `Bir kullanıcı senin anonim hesabınla sohbet başlattı.\n` +
+      `Mesajlarını bu DM'ye yaz; bot karşı tarafa anonim olarak iletecek.\n` +
+      `Sohbeti kapatmak için: \`v!konuşmakapat\``,
+    );
+  } catch (err) {
+    await stopAnonymousConversation(senderUserId);
+    logger.warn({ err, targetUserId: target.userId }, "Anonim sohbet karşı tarafa DM gönderilemedi");
+    return {
+      ok: false,
+      message: "Karşı tarafa DM gönderilemedi. Kullanıcının bottan DM almayı açtığından emin ol.",
+    };
+  }
+  logger.info({ senderUserId, targetAccountId, targetUserId: target.userId }, "Anonim sohbet başlatıldı");
 
   return {
     ok: true,
@@ -286,11 +298,21 @@ export async function relayAnonymousConversationMessage(
   }
 
   const recipient = await client.users.fetch(recipientUserId);
-  await recipient.send(
-    `🕵️ **Anonim sohbet mesajı** — **${senderAccount.displayName}**\n\n` +
-    message.content.slice(0, 1900) +
-    `\n\nSohbeti kapatmak için: \`v!konuşmakapat\``,
-  );
+  try {
+    await recipient.send(
+      `🕵️ **Anonim sohbet mesajı** — **${senderAccount.displayName}**\n\n` +
+      message.content.slice(0, 1900) +
+      `\n\nSohbeti kapatmak için: \`v!konuşmakapat\``,
+    );
+  } catch (err) {
+    await message.author.send(
+      "❌ Mesaj karşı tarafa iletilemedi. Karşı taraf bottan DM almayı kapatmış olabilir; sohbet kapatıldı.",
+    ).catch(() => null);
+    await stopAnonymousConversation(message.author.id);
+    logger.warn({ err, recipientUserId, senderAccountId }, "Anonim sohbet mesajı iletilemedi");
+    return true;
+  }
+  logger.info({ senderId: message.author.id, recipientUserId }, "Anonim sohbet mesajı iletildi");
   await db.update(anonymousSessionsTable)
     .set({ updatedAt: new Date() })
     .where(eq(anonymousSessionsTable.id, session.id));
