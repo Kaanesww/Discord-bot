@@ -55,6 +55,8 @@ import {
   handleAnonymousMessage, handleAnonymousButton, sendAnonymousProfileDm,
   sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
+  startAnonymousConversation, stopAnonymousConversation,
+  relayAnonymousConversationMessage,
 } from "./anonymousChat";
 import {
   getTagRoleSettings,
@@ -3852,6 +3854,40 @@ export async function startBot(): Promise<void> {
     if (!message.guildId) {
       const dmArgs = message.content.trim().split(/\s+/);
       const dmCmd = dmArgs.shift()?.toLowerCase();
+      const normalizedDmCmd = dmCmd?.replace(/[()]/g, "");
+
+      // v!konuşmabaşlat (anonim-hesap-id)
+      if (
+        normalizedDmCmd === "v!konuşmabaşlat" ||
+        normalizedDmCmd === "v!konusmabaslat" ||
+        (normalizedDmCmd === "v!konuşma" && ["başlat", "baslat", "start"].includes(dmArgs[0]?.toLowerCase() ?? ""))
+      ) {
+        const targetAccountId = (
+          normalizedDmCmd === "v!konuşma" ? dmArgs[1] : dmArgs[0]
+        )?.replace(/[()<>]/g, "");
+        if (!targetAccountId) {
+          await message.author.send(
+            "Kullanım: `v!konuşmabaşlat (anonim-hesap-id)`",
+          ).catch(() => null);
+        } else {
+          const result = await startAnonymousConversation(message.author.id, targetAccountId, client);
+          await message.author.send(`${result.ok ? "✅" : "❌"} ${result.message}`).catch(() => null);
+        }
+        return;
+      }
+
+      if (
+        normalizedDmCmd === "v!konuşmakapat" ||
+        normalizedDmCmd === "v!konusmakapat" ||
+        (normalizedDmCmd === "v!konuşma" && ["kapat", "bitir", "stop"].includes(dmArgs[0]?.toLowerCase() ?? ""))
+      ) {
+        const stopped = await stopAnonymousConversation(message.author.id);
+        await message.author.send(
+          stopped ? "✅ Anonim sohbet kapatıldı." : "ℹ️ Aktif bir anonim sohbetin yok.",
+        ).catch(() => null);
+        return;
+      }
+
       if (dmCmd === "v!anon" || dmCmd === "v!anonim") {
         const sub = dmArgs[0]?.toLowerCase();
         if (sub === "profil" || sub === "profile" || sub === "bilgi") {
@@ -3917,6 +3953,11 @@ export async function startBot(): Promise<void> {
             "`v!anon karaliste kaldir <id>` — Engeli kaldırır",
           ).catch(() => null);
         }
+      } else {
+        // Aktif anonim sohbet varsa bu DM mesajını karşı tarafa aktar.
+        await relayAnonymousConversationMessage(message, client).catch((err) => {
+          logger.error({ err, userId: message.author.id }, "Anonim DM aktarım hatası");
+        });
       }
       return;
     }

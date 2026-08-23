@@ -4,8 +4,9 @@ import {
   anonymousBlocksTable,
   anonymousChatTable,
   anonymousPendingTable,
+  anonymousSessionsTable,
 } from "@workspace/db";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, or } from "drizzle-orm";
 import {
   ChannelType,
   type Guild,
@@ -184,6 +185,116 @@ export async function sendAnonymousMessage(
       `\n\nYanıt almak istemiyorsan: \`v!anon karaliste ekle ${senderProfile.id}\``,
   });
   return { ok: true, message: `✅ Mesajın **${target.displayName}** hesabına anonim olarak gönderildi.` };
+}
+
+export async function startAnonymousConversation(
+  senderUserId: string,
+  targetAccountId: string,
+  client: Message["client"],
+): Promise<{ ok: boolean; message: string }> {
+  const target = await getAnonymousAccountById(targetAccountId);
+  if (!target) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
+  if (target.userId === senderUserId) return { ok: false, message: "Kendi hesabınla sohbet başlatamazsın." };
+
+  const senderProfiles = await getAnonymousProfile(senderUserId);
+  const senderProfile = senderProfiles.find(p => p.guildId === target.guildId) ?? senderProfiles[0];
+  if (!senderProfile) {
+    return { ok: false, message: "Önce anonim bir profil oluşturmalısın. Anonim kanalda ilk mesajını gönderip onayla." };
+  }
+  if (await isAnonymousBlocked(target.userId, senderProfile.id)) {
+    return { ok: false, message: "Bu anonim hesap senden mesaj almak istemiyor." };
+  }
+
+  await db.update(anonymousSessionsTable)
+    .set({ active: false, updatedAt: new Date() })
+    .where(and(
+      eq(anonymousSessionsTable.active, true),
+      or(
+        eq(anonymousSessionsTable.userAId, senderUserId),
+        eq(anonymousSessionsTable.userBId, senderUserId),
+      ),
+    ));
+
+  await db.insert(anonymousSessionsTable).values({
+    userAId: senderUserId,
+    userAAccountId: senderProfile.id,
+    userBId: target.userId,
+    userBAccountId: target.id,
+    active: true,
+    updatedAt: new Date(),
+  });
+
+  const recipient = await client.users.fetch(target.userId);
+  await recipient.send(
+    `🕵️ **Anonim sohbet başladı**\n` +
+    `Bir kullanıcı senin anonim hesabınla sohbet başlattı.\n` +
+    `Mesajlarını bu DM'ye yaz; bot karşı tarafa anonim olarak iletecek.\n` +
+    `Sohbeti kapatmak için: \`v!konuşmakapat\``,
+  ).catch(() => null);
+
+  return {
+    ok: true,
+    message: `✅ **${target.displayName}** ile anonim sohbet başladı.\nArtık bu DM'ye yazdığın her mesaj karşı tarafa anonim olarak iletilecek.\nSohbeti kapatmak için: \`v!konuşmakapat\``,
+  };
+}
+
+export async function stopAnonymousConversation(userId: string): Promise<boolean> {
+  const result = await db.update(anonymousSessionsTable)
+    .set({ active: false, updatedAt: new Date() })
+    .where(and(
+      eq(anonymousSessionsTable.active, true),
+      or(
+        eq(anonymousSessionsTable.userAId, userId),
+        eq(anonymousSessionsTable.userBId, userId),
+      ),
+    ))
+    .returning({ id: anonymousSessionsTable.id });
+  return result.length > 0;
+}
+
+export async function relayAnonymousConversationMessage(
+  message: Message,
+  client: Message["client"],
+): Promise<boolean> {
+  if (message.author.bot || message.guildId) return false;
+  const rows = await db.select().from(anonymousSessionsTable)
+    .where(and(
+      eq(anonymousSessionsTable.active, true),
+      or(
+        eq(anonymousSessionsTable.userAId, message.author.id),
+        eq(anonymousSessionsTable.userBId, message.author.id),
+      ),
+    )).limit(1);
+  const session = rows[0];
+  if (!session) return false;
+
+  const senderIsA = session.userAId === message.author.id;
+  const recipientUserId = senderIsA ? session.userBId : session.userAId;
+  const senderAccountId = senderIsA ? session.userAAccountId : session.userBAccountId;
+  if (await isAnonymousBlocked(recipientUserId, senderAccountId)) {
+    await message.author.send(
+      "🚫 Bu anonim hesap senden mesaj almayı engellemiş. Sohbet kapatıldı.",
+    ).catch(() => null);
+    await stopAnonymousConversation(message.author.id);
+    return true;
+  }
+
+  const senderAccount = await getAnonymousAccountById(senderAccountId);
+  if (!senderAccount) {
+    await stopAnonymousConversation(message.author.id);
+    return true;
+  }
+
+  const recipient = await client.users.fetch(recipientUserId);
+  await recipient.send(
+    `🕵️ **Anonim sohbet mesajı** — **${senderAccount.displayName}**\n\n` +
+    message.content.slice(0, 1900) +
+    `\n\nSohbeti kapatmak için: \`v!konuşmakapat\``,
+  );
+  await db.update(anonymousSessionsTable)
+    .set({ updatedAt: new Date() })
+    .where(eq(anonymousSessionsTable.id, session.id));
+  return true;
 }
 
 export async function sendAnonymousProfileDm(userId: string, client: Message["client"]): Promise<void> {

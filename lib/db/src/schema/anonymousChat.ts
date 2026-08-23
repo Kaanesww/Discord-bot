@@ -37,7 +37,19 @@ export const anonymousBlocksTable = pgTable("anonymous_blocks", {
     .on(table.userId, table.blockedAccountId),
 }));
 
+export const anonymousSessionsTable = pgTable("anonymous_sessions", {
+  id: serial("id").primaryKey(),
+  userAId: text("user_a_id").notNull(),
+  userAAccountId: text("user_a_account_id").notNull(),
+  userBId: text("user_b_id").notNull(),
+  userBAccountId: text("user_b_account_id").notNull(),
+  active: boolean("active").notNull().default(true),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 export type AnonymousChat = typeof anonymousChatTable.$inferSelect;
 export type AnonymousAccount = typeof anonymousAccountsTable.$inferSelect;
 export type AnonymousPending = typeof anonymousPendingTable.$inferSelect;
 export type AnonymousBlock = typeof anonymousBlocksTable.$inferSelect;
+export type AnonymousSession = typeof anonymousSessionsTable.$inferSelect;
