@@ -5,6 +5,8 @@ export const anonymousChatTable = pgTable("anonymous_chat", {
   channelId: text("channel_id").notNull(),
   approvalChannelId: text("approval_channel_id"),
   categoryId: text("category_id"),
+  generalWebhookId: text("general_webhook_id"),
+  generalWebhookToken: text("general_webhook_token"),
   enabled: boolean("enabled").notNull().default(true),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
