@@ -57,6 +57,7 @@ export async function ensureAnonymousSchema(): Promise<void> {
     id text PRIMARY KEY, guild_id text NOT NULL, user_id text NOT NULL,
     display_name text NOT NULL, webhook_id text NOT NULL, webhook_token text NOT NULL,
     anonymous_number integer, private_channel_id text, points integer NOT NULL DEFAULT 0,
+    avatar_url text,
     active boolean NOT NULL DEFAULT true,
     created_at timestamp NOT NULL DEFAULT now()
   )`);
@@ -84,6 +85,7 @@ export async function ensureAnonymousSchema(): Promise<void> {
     ADD COLUMN IF NOT EXISTS anonymous_number integer,
     ADD COLUMN IF NOT EXISTS private_channel_id text,
     ADD COLUMN IF NOT EXISTS points integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS avatar_url text,
     ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_messages (
     id serial PRIMARY KEY,
@@ -220,6 +222,7 @@ export async function getAnonymousProfileEmbed(guildId: string, userId: string):
   if (!account) return null;
   return new EmbedBuilder()
     .setColor(0x5865f2)
+    .setThumbnail(account.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png")
     .setTitle(`🕵️ ${account.displayName}`)
     .setDescription("Bu profil anonim sistemdeki kimliğindir. Gerçek Discord hesabın diğer kullanıcılara gösterilmez.")
     .addFields(
@@ -232,6 +235,39 @@ export async function getAnonymousProfileEmbed(guildId: string, userId: string):
     )
     .setFooter({ text: "Puan: özel anonim kanalından gönderdiğin her mesaj = 1 puan" })
     .setTimestamp();
+}
+
+export async function changeAnonymousAvatar(
+  guild: Guild,
+  userId: string,
+  avatarUrl: string,
+): Promise<{ ok: boolean; message: string }> {
+  const account = await getOwnAnonymousProfile(guild.id, userId);
+  if (!account) return { ok: false, message: "Aktif anonim profilin bulunamadı." };
+  if (!account.privateChannelId || account.webhookToken === "private-channel") {
+    return { ok: false, message: "Önce anonim özel kanalına katılmalısın." };
+  }
+  const charged = await pool.query(
+    `UPDATE anonymous_accounts SET points = points - 100
+     WHERE id = $1 AND user_id = $2 AND active = true AND points >= 100
+     RETURNING points`,
+    [account.id, userId],
+  );
+  if (!charged.rowCount) {
+    return { ok: false, message: `❌ Profil fotoğrafını değiştirmek için **100 puan** gerekiyor. Mevcut puanın: **${account.points}**.` };
+  }
+  const webhook = new WebhookClient({ id: account.webhookId, token: account.webhookToken });
+  try {
+    await webhook.edit({ avatar: avatarUrl });
+    webhook.destroy();
+    await db.update(anonymousAccountsTable).set({ avatarUrl }).where(eq(anonymousAccountsTable.id, account.id));
+    return { ok: true, message: `✅ Profil fotoğrafın güncellendi. **100 puan** harcandı; kalan puanın: **${Number(charged.rows[0].points)}**.` };
+  } catch (err) {
+    webhook.destroy();
+    await pool.query(`UPDATE anonymous_accounts SET points = points + 100 WHERE id = $1`, [account.id]);
+    logger.warn({ err, accountId: account.id }, "Anonim profil avatarı güncellenemedi; puan iade edildi");
+    return { ok: false, message: "❌ Profil fotoğrafı güncellenemedi, puanın iade edildi." };
+  }
 }
 
 export async function setupAnonymousApprovalPanel(
@@ -759,7 +795,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const generalMessage = await generalWebhook.send({
       content,
       username: privateAccount.displayName,
-      avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
+      avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
       wait: true,
     });
@@ -779,7 +815,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       const copy = await copyWebhook.send({
         content,
         username: privateAccount.displayName,
-        avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
+        avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
         allowedMentions: { parse: [] },
         wait: true,
       }).catch(() => null);

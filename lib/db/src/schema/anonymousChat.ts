@@ -20,6 +20,7 @@ export const anonymousAccountsTable = pgTable("anonymous_accounts", {
   webhookToken: text("webhook_token").notNull(),
   anonymousNumber: integer("anonymous_number"),
   points: integer("points").notNull().default(0),
+  avatarUrl: text("avatar_url"),
   privateChannelId: text("private_channel_id"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),

@@ -57,6 +57,7 @@ import {
   ensureAnonymousSchema, setupAnonymousApprovalPanel,
   leaveAnonymousAccount,
   getOwnAnonymousProfile, getAnonymousProfileEmbed,
+  changeAnonymousAvatar,
   sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
@@ -3105,6 +3106,18 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     if (!account || account.privateChannelId !== m.channelId) return;
     const embed = await getAnonymousProfileEmbed(m.guildId, m.author.id);
     if (embed) await m.reply({ embeds: [embed] });
+    return;
+  }
+  if (sub === "foto" || sub === "avatar" || sub === "fotoğraf" || sub === "fotograf") {
+    const account = await getOwnAnonymousProfile(m.guildId, m.author.id);
+    if (!account || account.privateChannelId !== m.channelId) return;
+    const attachment = m.attachments.find((file) => file.contentType?.startsWith("image/"));
+    if (!attachment) {
+      await m.reply("🖼️ Kullanım: `v!anon foto` komutuyla birlikte bir görsel eklemelisin.\nMaliyet: **100 puan**");
+      return;
+    }
+    const result = await changeAnonymousAvatar(m.guild, m.author.id, attachment.url);
+    await m.reply(result.message);
     return;
   }
   if (sub === "ayrıl" || sub === "ayril" || sub === "çık" || sub === "cik") {
