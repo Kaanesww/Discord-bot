@@ -8,7 +8,7 @@ import {
   anonymousMessagesTable,
 } from "@workspace/db";
 import { pool } from "@workspace/db";
-import { and, eq, lt, or } from "drizzle-orm";
+import { and, eq, lt, or, sql } from "drizzle-orm";
 import {
   ChannelType,
   type Guild,
@@ -56,7 +56,8 @@ export async function ensureAnonymousSchema(): Promise<void> {
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_accounts (
     id text PRIMARY KEY, guild_id text NOT NULL, user_id text NOT NULL,
     display_name text NOT NULL, webhook_id text NOT NULL, webhook_token text NOT NULL,
-    anonymous_number integer, private_channel_id text, active boolean NOT NULL DEFAULT true,
+    anonymous_number integer, private_channel_id text, points integer NOT NULL DEFAULT 0,
+    active boolean NOT NULL DEFAULT true,
     created_at timestamp NOT NULL DEFAULT now()
   )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_pending (
@@ -82,6 +83,7 @@ export async function ensureAnonymousSchema(): Promise<void> {
   await pool.query(`ALTER TABLE anonymous_accounts
     ADD COLUMN IF NOT EXISTS anonymous_number integer,
     ADD COLUMN IF NOT EXISTS private_channel_id text,
+    ADD COLUMN IF NOT EXISTS points integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_messages (
     id serial PRIMARY KEY,
@@ -202,6 +204,34 @@ export async function leaveAnonymousAccount(
     if (channel) await channel.delete("Anonim hesaptan ayrıldı").catch(() => null);
   }
   return { ok: true, message: "✅ Anonim hesaptan ayrıldın. Özel kanalın kapatıldı." };
+}
+
+export async function getOwnAnonymousProfile(guildId: string, userId: string) {
+  const rows = await db.select().from(anonymousAccountsTable).where(and(
+    eq(anonymousAccountsTable.guildId, guildId),
+    eq(anonymousAccountsTable.userId, userId),
+    eq(anonymousAccountsTable.active, true),
+  )).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getAnonymousProfileEmbed(guildId: string, userId: string): Promise<EmbedBuilder | null> {
+  const account = await getOwnAnonymousProfile(guildId, userId);
+  if (!account) return null;
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`🕵️ ${account.displayName}`)
+    .setDescription("Bu profil anonim sistemdeki kimliğindir. Gerçek Discord hesabın diğer kullanıcılara gösterilmez.")
+    .addFields(
+      { name: "Anonim Kimlik", value: account.displayName, inline: true },
+      { name: "Puan", value: `⭐ **${account.points}**`, inline: true },
+      { name: "Durum", value: account.active ? "🟢 Aktif" : "🔴 Pasif", inline: true },
+      { name: "Mesaj Sayısı", value: `${account.points} anonim mesaj`, inline: true },
+      { name: "Katılım Tarihi", value: `<t:${Math.floor(account.createdAt.getTime() / 1000)}:D>`, inline: true },
+      { name: "Özel Kanal", value: account.privateChannelId ? `<#${account.privateChannelId}>` : "Henüz oluşturulmadı", inline: true },
+    )
+    .setFooter({ text: "Puan: özel anonim kanalından gönderdiğin her mesaj = 1 puan" })
+    .setTimestamp();
 }
 
 export async function setupAnonymousApprovalPanel(
@@ -734,6 +764,9 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       wait: true,
     });
     generalWebhook.destroy();
+    await db.update(anonymousAccountsTable)
+      .set({ points: sql`${anonymousAccountsTable.points} + 1` })
+      .where(eq(anonymousAccountsTable.id, privateAccount.id));
     const recipients: Record<string, string> = {};
     const accounts = await getAnonymousAccounts(message.guildId);
     for (const recipient of accounts) {

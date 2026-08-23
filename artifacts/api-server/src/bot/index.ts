@@ -56,6 +56,7 @@ import {
   handleAnonymousMessage, handleAnonymousButton, sendAnonymousProfileDm,
   ensureAnonymousSchema, setupAnonymousApprovalPanel,
   leaveAnonymousAccount,
+  getOwnAnonymousProfile, getAnonymousProfileEmbed,
   sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
@@ -3098,6 +3099,14 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
 async function pfxAnon(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId || !m.member) return;
   const sub = args[0]?.toLowerCase();
+  if (sub === "profil" || sub === "profile") {
+    const account = await getOwnAnonymousProfile(m.guildId, m.author.id);
+    // Profil komutu yalnızca kullanıcının özel anonim kanalında çalışır.
+    if (!account || account.privateChannelId !== m.channelId) return;
+    const embed = await getAnonymousProfileEmbed(m.guildId, m.author.id);
+    if (embed) await m.reply({ embeds: [embed] });
+    return;
+  }
   if (sub === "ayrıl" || sub === "ayril" || sub === "çık" || sub === "cik") {
     const result = await leaveAnonymousAccount(m.guild, m.author.id);
     await m.reply(result.message);
@@ -3479,6 +3488,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
   // Anonim sohbet
   anon: pfxAnon, anonim: pfxAnon,
+  anonprofil: async (m) => pfxAnon(m, ["profil"]),
   // Kanal oluşturma
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
   // Kanala mesaj gönder
