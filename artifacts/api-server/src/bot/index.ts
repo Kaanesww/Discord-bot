@@ -2,6 +2,7 @@ import {
   Client, Events, GatewayIntentBits,
   AttachmentBuilder, TextChannel, ChannelType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  ChannelSelectMenuBuilder,
   PermissionFlagsBits, EmbedBuilder,
   Partials,
   type Message,
@@ -86,6 +87,15 @@ type PfxHandler = (m: Message, args: string[]) => Promise<void>;
 
 const voiceSessions = new Map<string, number>();
 const VOICE_XP_PER_MIN = 10;
+
+type AnonymousSetupSession = {
+  guildId: string;
+  userId: string;
+  generalChannelId?: string;
+  approvalChannelId?: string;
+  categoryId?: string;
+};
+const anonymousSetupSessions = new Map<string, AnonymousSetupSession>();
 
 // ── Sunucu Kur yapısı ─────────────────────────────────────────────────────────
 
@@ -3170,7 +3180,19 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     const general = mentions[1];
     const category = mentions[2];
     if (!approval || !general) {
-      await m.reply("❌ Kullanım: `anon kur #onay-kanalı #anonim-genel [#kategori]`");
+      await m.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle("🕵️ Anonim Sohbet Kurulumu")
+          .setDescription("Kanal ve kategori seçicilerini kullanarak kurulumu tamamla. Bu panel yalnızca senin kullanımına açıktır.")
+          .addFields(
+            { name: "Gerekli seçimler", value: "1. Anonim genel sohbet kanalı\n2. Onay kanalı\n3. Özel kanallar için kategori" },
+            { name: "Bot izinleri", value: "Kanal Yönet, Webhook Yönet, Mesajları Yönet ve Mesaj Gönder" },
+          )],
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`anon_setup_start:${m.guildId}:${m.author.id}`).setLabel("Kanal Seçerek Kur").setStyle(ButtonStyle.Primary),
+        )],
+      });
       return;
     }
     try {
@@ -3818,10 +3840,101 @@ export async function startBot(): Promise<void> {
 
   // ── Button etkileşimleri ──────────────────────────────────────────────────
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isChannelSelectMenu() && interaction.customId.startsWith("anon_setup_")) {
+      const [kind, guildId, userId] = interaction.customId.split(":");
+      if (!interaction.guildId || interaction.guildId !== guildId || interaction.user.id !== userId) {
+        await interaction.reply({ content: "❌ Bu seçim paneli sana ait değil.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const key = `${guildId}:${userId}`;
+      const session = anonymousSetupSessions.get(key) ?? { guildId, userId };
+      const selected = interaction.values[0];
+      if (kind === "anon_setup_general") session.generalChannelId = selected;
+      if (kind === "anon_setup_approval") session.approvalChannelId = selected;
+      if (kind === "anon_setup_category") session.categoryId = selected;
+      anonymousSetupSessions.set(key, session);
+
+      const finishRow = session.generalChannelId && session.approvalChannelId && session.categoryId
+        ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`anon_setup_finish:${guildId}:${userId}`).setLabel("✅ Kurulumu Tamamla").setStyle(ButtonStyle.Success),
+        )]
+        : [];
+      await interaction.update({
+        content:
+          `Seçimler kaydedildi.\n` +
+          `• Genel kanal: ${session.generalChannelId ? `<#${session.generalChannelId}>` : "Seçilmedi"}\n` +
+          `• Onay kanalı: ${session.approvalChannelId ? `<#${session.approvalChannelId}>` : "Seçilmedi"}\n` +
+          `• Özel kanal kategorisi: ${session.categoryId ? `<#${session.categoryId}>` : "Seçilmedi"}\n\n` +
+          (finishRow.length ? "Her şey hazır. Kurulumu başlatmak için butona bas." : "Eksik seçimleri aşağıdaki menülerden tamamla."),
+        components: [
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_general:${guildId}:${userId}`).setPlaceholder("Anonim genel sohbet kanalını seç").setChannelTypes(ChannelType.GuildText).setMaxValues(1),
+          ),
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_approval:${guildId}:${userId}`).setPlaceholder("Onay kanalını seç").setChannelTypes(ChannelType.GuildText).setMaxValues(1),
+          ),
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_category:${guildId}:${userId}`).setPlaceholder("Özel kanal kategorisini seç").setChannelTypes(ChannelType.GuildCategory).setMaxValues(1),
+          ),
+          ...finishRow,
+        ],
+      }).catch(() => null);
+      return;
+    }
     if (!interaction.isButton()) return;
     const { customId } = interaction;
 
     // Anonim profil onay/red butonları DM'den gelir.
+    if (customId.startsWith("anon_setup_start:")) {
+      const [, guildId, userId] = customId.split(":");
+      if (userId !== interaction.user.id || interaction.guildId !== guildId) {
+        await interaction.reply({ content: "❌ Bu panel sana ait değil.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const key = `${guildId}:${userId}`;
+      anonymousSetupSessions.set(key, { guildId: guildId!, userId: userId! });
+      await interaction.reply({
+        content: "Kurulum için üç seçimi de yap. Seçimlerden sonra **Kurulumu Tamamla** butonu görünecek.",
+        ephemeral: true,
+        components: [
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_general:${guildId}:${userId}`).setPlaceholder("Anonim genel sohbet kanalını seç").setChannelTypes(ChannelType.GuildText).setMaxValues(1),
+          ),
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_approval:${guildId}:${userId}`).setPlaceholder("Onay kanalını seç").setChannelTypes(ChannelType.GuildText).setMaxValues(1),
+          ),
+          new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+            new ChannelSelectMenuBuilder().setCustomId(`anon_setup_category:${guildId}:${userId}`).setPlaceholder("Özel kanal kategorisini seç").setChannelTypes(ChannelType.GuildCategory).setMaxValues(1),
+          ),
+        ],
+      }).catch(() => null);
+      return;
+    }
+    if (customId.startsWith("anon_setup_finish:")) {
+      const [, guildId, userId] = customId.split(":");
+      if (userId !== interaction.user.id || interaction.guildId !== guildId) {
+        await interaction.reply({ content: "❌ Bu panel sana ait değil.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const session = anonymousSetupSessions.get(`${guildId}:${userId}`);
+      if (!session?.generalChannelId || !session.approvalChannelId || !session.categoryId) {
+        await interaction.reply({ content: "❌ Önce genel kanal, onay kanalı ve kategori seçimlerini tamamla.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.deferUpdate();
+      try {
+        await setupAnonymousApprovalPanel(interaction.guild!, session.approvalChannelId, session.generalChannelId, session.categoryId);
+        anonymousSetupSessions.delete(`${guildId}:${userId}`);
+        await interaction.editReply({
+          content: `✅ Anonim sistem kuruldu!\n• Genel sohbet: <#${session.generalChannelId}>\n• Onay kanalı: <#${session.approvalChannelId}>\n• Özel kanal kategorisi: <#${session.categoryId}>`,
+          components: [],
+        });
+      } catch (err) {
+        logger.error({ err }, "Anonim butonlu kurulum başarısız");
+        await interaction.editReply({ content: "❌ Kurulum başarısız. Botun kanal, webhook, mesaj ve izinleri yönetme yetkilerini kontrol et.", components: [] }).catch(() => null);
+      }
+      return;
+    }
     if (customId.startsWith("anon_create_account:")) {
       const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
         logger.error({ err }, "Anonim hesap butonu hatası");
