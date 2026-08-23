@@ -6,6 +6,7 @@ import {
   anonymousPendingTable,
   anonymousSessionsTable,
   anonymousMessagesTable,
+  anonymousIdRequestsTable,
 } from "@workspace/db";
 import { pool } from "@workspace/db";
 import { and, eq, lt, or, sql } from "drizzle-orm";
@@ -83,6 +84,7 @@ export async function ensureAnonymousSchema(): Promise<void> {
     ADD COLUMN IF NOT EXISTS general_webhook_token text`);
   await pool.query(`ALTER TABLE anonymous_accounts
     ADD COLUMN IF NOT EXISTS anonymous_number integer,
+    ADD COLUMN IF NOT EXISTS anonymous_id text,
     ADD COLUMN IF NOT EXISTS private_channel_id text,
     ADD COLUMN IF NOT EXISTS points integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS avatar_url text,
@@ -100,6 +102,13 @@ export async function ensureAnonymousSchema(): Promise<void> {
     ON anonymous_accounts (guild_id, user_id)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS anonymous_accounts_guild_number_unique
     ON anonymous_accounts (guild_id, anonymous_number) WHERE anonymous_number IS NOT NULL`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS anonymous_accounts_anonymous_id_unique
+    ON anonymous_accounts (anonymous_id) WHERE anonymous_id IS NOT NULL`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_id_requests (
+    id text PRIMARY KEY, account_id text NOT NULL, user_id text NOT NULL,
+    requested_id text NOT NULL, expires_at timestamp NOT NULL,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
 }
 
 export async function getAnonymousAccounts(guildId: string) {
@@ -223,10 +232,10 @@ export async function getAnonymousProfileEmbed(guildId: string, userId: string):
   return new EmbedBuilder()
     .setColor(0x5865f2)
     .setThumbnail(account.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png")
-    .setTitle(`🕵️ ${account.displayName}`)
+    .setTitle(`🕵️ ${account.anonymousId ?? account.displayName}`)
     .setDescription("Bu profil anonim sistemdeki kimliğindir. Gerçek Discord hesabın diğer kullanıcılara gösterilmez.")
     .addFields(
-      { name: "Anonim Kimlik", value: account.displayName, inline: true },
+      { name: "Anonim Kimlik", value: account.anonymousId ?? account.displayName, inline: true },
       { name: "Puan", value: `⭐ **${account.points}**`, inline: true },
       { name: "Durum", value: account.active ? "🟢 Aktif" : "🔴 Pasif", inline: true },
       { name: "Mesaj Sayısı", value: `${account.points} anonim mesaj`, inline: true },
@@ -357,6 +366,7 @@ export async function getAnonymousProfile(userId: string) {
   return db.select({
     id: anonymousAccountsTable.id,
     displayName: anonymousAccountsTable.displayName,
+    anonymousId: anonymousAccountsTable.anonymousId,
     guildId: anonymousAccountsTable.guildId,
   }).from(anonymousAccountsTable).where(eq(anonymousAccountsTable.userId, userId));
 }
@@ -369,6 +379,79 @@ export async function getAnonymousAccountById(id: string) {
 
 function cleanAlias(value: string): string {
   return value.trim().replace(/[\r\n]/g, " ").slice(0, 32);
+}
+
+function cleanAnonymousId(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function publicAnonymousId(account: { anonymousId: string | null; displayName: string }): string {
+  return account.anonymousId ?? account.displayName;
+}
+
+export async function requestAnonymousIdChange(
+  userId: string,
+  requestedId: string,
+): Promise<{ ok: boolean; message: string; requestId?: string; accountId?: string }> {
+  const normalized = cleanAnonymousId(requestedId);
+  if (!/^[A-Z0-9]{3,20}$/.test(normalized)) {
+    return { ok: false, message: "Anonim ID yalnızca 3-20 harf veya rakam içerebilir." };
+  }
+  const accounts = await db.select().from(anonymousAccountsTable)
+    .where(and(eq(anonymousAccountsTable.userId, userId), eq(anonymousAccountsTable.active, true))).limit(1);
+  const account = accounts[0];
+  if (!account) return { ok: false, message: "Aktif anonim profilin bulunamadı." };
+  if (cleanAnonymousId(publicAnonymousId(account)) === normalized) {
+    return { ok: false, message: "Bu ID zaten mevcut anonim ID'n." };
+  }
+  const used = await db.select({ id: anonymousAccountsTable.id }).from(anonymousAccountsTable)
+    .where(eq(anonymousAccountsTable.anonymousId, normalized)).limit(1);
+  if (used.length) return { ok: false, message: "Bu anonim ID zaten kullanılıyor. Başka bir ID seç." };
+  const requestId = `${userId}-${Date.now()}-${randomBytes(3).toString("hex")}`;
+  await db.delete(anonymousIdRequestsTable).where(eq(anonymousIdRequestsTable.userId, userId));
+  await db.insert(anonymousIdRequestsTable).values({
+    id: requestId, accountId: account.id, userId, requestedId: normalized,
+    expiresAt: new Date(Date.now() + 10 * 60_000),
+  });
+  return { ok: true, message: "Onay bekleniyor.", requestId, accountId: account.id };
+}
+
+export async function resolveAnonymousIdChange(
+  requestId: string,
+  userId: string,
+  approve: boolean,
+): Promise<{ ok: boolean; message: string }> {
+  const rows = await db.select().from(anonymousIdRequestsTable)
+    .where(and(eq(anonymousIdRequestsTable.id, requestId), eq(anonymousIdRequestsTable.userId, userId))).limit(1);
+  const request = rows[0];
+  if (!request || request.expiresAt <= new Date()) {
+    if (request) await db.delete(anonymousIdRequestsTable).where(eq(anonymousIdRequestsTable.id, request.id));
+    return { ok: false, message: "Bu anonim ID isteğinin süresi dolmuş." };
+  }
+  await db.delete(anonymousIdRequestsTable).where(eq(anonymousIdRequestsTable.id, request.id));
+  if (!approve) return { ok: true, message: "Anonim ID değişikliği reddedildi; puanın harcanmadı." };
+  const used = await db.select({ id: anonymousAccountsTable.id }).from(anonymousAccountsTable)
+    .where(and(eq(anonymousAccountsTable.anonymousId, request.requestedId), sql`${anonymousAccountsTable.id} <> ${request.accountId}`)).limit(1);
+  if (used.length) return { ok: false, message: "Bu anonim ID bu sırada başka biri tarafından alındı; puanın harcanmadı." };
+  const charged = await pool.query(
+    `UPDATE anonymous_accounts SET points = points - 50, anonymous_id = $1
+     WHERE id = $2 AND user_id = $3 AND active = true AND points >= 50
+     RETURNING points`,
+    [request.requestedId, request.accountId, userId],
+  );
+  if (!charged.rowCount) return { ok: false, message: "Anonim ID değiştirmek için 50 puanın olmalı. Puanın harcanmadı." };
+  return { ok: true, message: `Anonim ID'n **${request.requestedId}** olarak değiştirildi. **50 puan** harcandı; kalan puanın: **${charged.rows[0].points}**.` };
+}
+
+export async function getAnonymousPointLeaderboard(limit = 10) {
+  return db.select({
+    anonymousId: anonymousAccountsTable.anonymousId,
+    displayName: anonymousAccountsTable.displayName,
+    points: anonymousAccountsTable.points,
+  }).from(anonymousAccountsTable)
+    .where(eq(anonymousAccountsTable.active, true))
+    .orderBy(sql`${anonymousAccountsTable.points} DESC`, sql`${anonymousAccountsTable.createdAt} ASC`)
+    .limit(limit);
 }
 
 export async function updateAnonymousProfile(
@@ -460,7 +543,7 @@ export async function sendAnonymousMessage(
   await recipient.send({
     content:
       `🕵️ **Anonim mesajın var**\n\n` +
-      `Gönderen: **${senderProfile.displayName}**\n` +
+      `Gönderen: **${senderProfile.anonymousId ?? senderProfile.displayName}**\n` +
       `Gönderen anonim hesap ID'si: \`${senderProfile.id}\`\n\n` +
       content.trim().slice(0, 1900) +
       `\n\nYanıt almak istemiyorsan: \`v!anon karaliste ekle ${senderProfile.id}\``,
@@ -687,7 +770,7 @@ export async function handleAnonymousButton(
   const webhook = new WebhookClient({ id: account.webhookId, token: account.webhookToken });
   await webhook.send({
     content: pending.content,
-    username: account.displayName,
+    username: account.anonymousId ?? account.displayName,
     avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
     allowedMentions: { parse: [] },
   });
@@ -794,7 +877,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const generalWebhook = new WebhookClient({ id: generalWebhookId, token: generalWebhookToken });
     const generalMessage = await generalWebhook.send({
       content,
-      username: privateAccount.displayName,
+      username: privateAccount.anonymousId ?? privateAccount.displayName,
       avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
       wait: true,
@@ -814,7 +897,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       const copyWebhook = new WebhookClient({ id: recipient.webhookId, token: recipient.webhookToken });
       const copy = await copyWebhook.send({
         content,
-        username: privateAccount.displayName,
+        username: privateAccount.anonymousId ?? privateAccount.displayName,
         avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
         allowedMentions: { parse: [] },
         wait: true,
@@ -863,7 +946,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     });
     await webhook.send({
       content: message.content.slice(0, 2000),
-      username: account.displayName,
+      username: account.anonymousId ?? account.displayName,
       // Gerçek profil fotoğrafı kullanılmaz; anonimlik güçlendirilir.
       avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },

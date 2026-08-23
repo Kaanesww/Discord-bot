@@ -23,3 +23,6 @@ timeoutMs = 20000
 
 [userenv.shared]
 DISCORD_CLIENT_ID = "1484845151989010473"
+
+[nix]
+channel = "stable-25_05"

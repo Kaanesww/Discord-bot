@@ -19,6 +19,8 @@ export const anonymousAccountsTable = pgTable("anonymous_accounts", {
   webhookId: text("webhook_id").notNull(),
   webhookToken: text("webhook_token").notNull(),
   anonymousNumber: integer("anonymous_number"),
+  /** Kullanıcının seçtiği, diğer tüm anonim hesaplarda benzersiz görünen kimlik. */
+  anonymousId: text("anonymous_id"),
   points: integer("points").notNull().default(0),
   avatarUrl: text("avatar_url"),
   privateChannelId: text("private_channel_id"),
@@ -27,7 +29,17 @@ export const anonymousAccountsTable = pgTable("anonymous_accounts", {
 }, (table) => ({
   guildUserUnique: uniqueIndex("anonymous_accounts_guild_user_unique").on(table.guildId, table.userId),
   guildNumberUnique: uniqueIndex("anonymous_accounts_guild_number_unique").on(table.guildId, table.anonymousNumber),
+  anonymousIdUnique: uniqueIndex("anonymous_accounts_anonymous_id_unique").on(table.anonymousId),
 }));
+
+export const anonymousIdRequestsTable = pgTable("anonymous_id_requests", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  userId: text("user_id").notNull(),
+  requestedId: text("requested_id").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
 
 export const anonymousMessagesTable = pgTable("anonymous_messages", {
   id: serial("id").primaryKey(),
@@ -72,6 +84,7 @@ export const anonymousSessionsTable = pgTable("anonymous_sessions", {
 
 export type AnonymousChat = typeof anonymousChatTable.$inferSelect;
 export type AnonymousAccount = typeof anonymousAccountsTable.$inferSelect;
+export type AnonymousIdRequest = typeof anonymousIdRequestsTable.$inferSelect;
 export type AnonymousMessage = typeof anonymousMessagesTable.$inferSelect;
 export type AnonymousPending = typeof anonymousPendingTable.$inferSelect;
 export type AnonymousBlock = typeof anonymousBlocksTable.$inferSelect;

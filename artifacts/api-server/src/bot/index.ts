@@ -62,6 +62,7 @@ import {
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
   relayAnonymousConversationMessage,
+  requestAnonymousIdChange, resolveAnonymousIdChange, getAnonymousPointLeaderboard,
 } from "./anonymousChat";
 import {
   getTagRoleSettings,
@@ -3100,6 +3101,19 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
 async function pfxAnon(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId || !m.member) return;
   const sub = args[0]?.toLowerCase();
+  if (sub === "sıralama" || sub === "siralama" || sub === "lider" || sub === "leaderboard" || sub === "puan") {
+    const rows = await getAnonymousPointLeaderboard(10);
+    const embed = new EmbedBuilder()
+      .setColor(0xffc857)
+      .setTitle("🕵️ Anonim Puan Sıralaması")
+      .setDescription(rows.length
+        ? rows.map((row, i) => `${i + 1}. **${row.anonymousId ?? row.displayName}** — ⭐ **${row.points} puan**`).join("\n")
+        : "Henüz anonim mesaj gönderen yok.")
+      .setFooter({ text: "Anonim özel kanalından gönderilen her mesaj 1 puan kazandırır." })
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
+    return;
+  }
   if (sub === "profil" || sub === "profile") {
     const account = await getOwnAnonymousProfile(m.guildId, m.author.id);
     // Profil komutu yalnızca kullanıcının özel anonim kanalında çalışır.
@@ -3181,7 +3195,8 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     "`anon kur #onay #genel [#kategori]` — onay paneli ve sistemi kurar\n" +
     "`anon aç #kanal` — anonim sohbeti açar\n" +
     "`anon durum` — mevcut kanalı gösterir\n" +
-    "`anon kapat` — anonim sohbeti kapatır",
+    "`anon kapat` — anonim sohbeti kapatır\n" +
+    "`anon sıralama` — anonim puan sıralamasını gösterir",
   );
 }
 
@@ -3501,6 +3516,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
   // Anonim sohbet
   anon: pfxAnon, anonim: pfxAnon,
+  anonpuan: async (m) => pfxAnon(m, ["sıralama"]),
+  anonsiralama: async (m) => pfxAnon(m, ["sıralama"]),
   anonprofil: async (m) => pfxAnon(m, ["profil"]),
   // Kanal oluşturma
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
@@ -3837,6 +3854,30 @@ export async function startBot(): Promise<void> {
       await interaction.reply({ content: result.content ?? "İşlem tamamlandı.", ephemeral: true }).catch(() => null);
       return;
     }
+    if (customId.startsWith("anon_id_approve:") || customId.startsWith("anon_id_deny:")) {
+      const [action, requestId, buttonUserId] = customId.split(":");
+      if (buttonUserId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu buton sana ait değil.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const result = await resolveAnonymousIdChange(
+        requestId!,
+        interaction.user.id,
+        action === "anon_id_approve",
+      ).catch((err) => {
+        logger.error({ err }, "Anonim ID butonu hatası");
+        return { ok: false, message: "İşlem sırasında hata oluştu." };
+      });
+      await interaction.update({
+        embeds: [new EmbedBuilder()
+          .setColor(result.ok ? (action === "anon_id_approve" ? 0x57f287 : 0x72767d) : 0xed4245)
+          .setTitle(action === "anon_id_approve" ? "✅ Anonim ID Onaylandı" : action === "anon_id_deny" ? "❌ Anonim ID Reddedildi" : "⚠️ Anonim ID İşlemi")
+          .setDescription(result.message)
+          .setTimestamp()],
+        components: [],
+      }).catch(() => null);
+      return;
+    }
     if (customId.startsWith("anon_approve:") || customId.startsWith("anon_deny:")) {
       const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
         logger.error({ err }, "Anonim profil butonu hatası");
@@ -3992,6 +4033,57 @@ export async function startBot(): Promise<void> {
           } else {
             await sendAnonymousProfileDm(message.author.id, client);
           }
+        } else if (sub === "id" || sub === "kimlik") {
+          const requestedId = dmArgs[1];
+          if (!requestedId) {
+            await message.author.send(
+              "Kullanım: `v!anon id <yeni-id>`\n" +
+              "ID 3-20 karakter olmalı ve yalnızca harf/rakam içermeli. Değişiklik ücreti: **50 puan**.",
+            ).catch(() => null);
+          } else {
+            const result = await requestAnonymousIdChange(message.author.id, requestedId);
+            if (!result.ok || !result.requestId) {
+              await message.author.send(`❌ ${result.message}`).catch(() => null);
+            } else {
+              const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`anon_id_approve:${result.requestId}:${message.author.id}`)
+                  .setLabel("✅ Onayla (50 puan)")
+                  .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                  .setCustomId(`anon_id_deny:${result.requestId}:${message.author.id}`)
+                  .setLabel("❌ Reddet")
+                  .setStyle(ButtonStyle.Danger),
+              );
+              await message.author.send({
+                embeds: [new EmbedBuilder()
+                  .setColor(0xffc857)
+                  .setTitle("🕵️ Anonim ID Değişikliği")
+                  .setDescription(
+                    `Yeni anonim ID'n **${requestedId.toUpperCase()}** olarak ayarlanacak.\n\n` +
+                    "Bu ID tüm anonim hesaplar arasında benzersiz olmalıdır. Onaylarsan **50 puan** düşülür; reddedersen puanın harcanmaz.",
+                  )
+                  .addFields(
+                    { name: "Yeni ID", value: `\`${requestedId.toUpperCase()}\``, inline: true },
+                    { name: "Ücret", value: "⭐ 50 puan", inline: true },
+                  )
+                  .setFooter({ text: "Bu istek 10 dakika içinde geçerliliğini yitirir." })
+                  .setTimestamp()],
+                components: [row],
+              }).catch(() => null);
+            }
+          }
+        } else if (sub === "sıralama" || sub === "siralama" || sub === "lider" || sub === "puan") {
+          const rows = await getAnonymousPointLeaderboard(10);
+          const embed = new EmbedBuilder()
+            .setColor(0xffc857)
+            .setTitle("🕵️ Anonim Puan Sıralaması")
+            .setDescription(rows.length
+              ? rows.map((row, i) => `${i + 1}. **${row.anonymousId ?? row.displayName}** — ⭐ **${row.points} puan**`).join("\n")
+              : "Henüz anonim mesaj gönderen yok.")
+            .setFooter({ text: "Anonim özel kanalından gönderilen her mesaj 1 puan kazandırır." })
+            .setTimestamp();
+          await message.author.send({ embeds: [embed] }).catch(() => null);
         } else if (sub === "mesaj" || sub === "dm" || sub === "gönder" || sub === "gonder") {
           const accountId = dmArgs[1];
           const content = dmArgs.slice(2).join(" ").trim();
@@ -4035,7 +4127,9 @@ export async function startBot(): Promise<void> {
             "🕵️ **Anonim DM kullanımı**\n" +
             "`v!anon profil` — Hesap ID'lerini ve profillerini gösterir\n" +
             "`v!anon profil düzenle <id> <ad>` — Profil adını değiştirir\n" +
+            "`v!anon id <yeni-id>` — Anonim ID'ni 50 puan karşılığında değiştirir\n" +
             "`v!anon mesaj <id> <mesaj>` — Anonim hesaba DM gönderir\n" +
+            "`v!anon sıralama` — Anonim puan sıralamasını gösterir\n" +
             "`v!anon karaliste liste` — Engellediklerini gösterir\n" +
             "`v!anon karaliste ekle <id>` — Bu hesaptan mesaj alma\n" +
             "`v!anon karaliste kaldir <id>` — Engeli kaldırır",
