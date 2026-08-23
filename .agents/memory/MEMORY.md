@@ -1,3 +1,4 @@
 - [DB eksik kolon düzeltme](db-missing-columns.md) — drizzle push TTY gerektirdiğinden yeni kolonlar manuel SQL ile eklenmelidir
 - [Merge strategy](merge-strategy.md) — remote çok daha zengin; çakışmalarda --theirs al, sonra local özellikleri üstüne yaz
 - [Database runtime choice](database-runtime-choice.md) — PostgreSQL driver ve Drizzle şemaları aynı dialect'te tutulmalı
+- [Anonim sistem şeması](anonymous-schema-bootstrap.md) — anonim tabloları uygulama açılışında idempotent SQL ile hazırlamak gerekir; veritabanında tablolar başlangıçta mevcut olmayabilir

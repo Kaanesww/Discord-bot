@@ -5,7 +5,9 @@ import {
   anonymousChatTable,
   anonymousPendingTable,
   anonymousSessionsTable,
+  anonymousMessagesTable,
 } from "@workspace/db";
+import { pool } from "@workspace/db";
 import { and, eq, lt, or } from "drizzle-orm";
 import {
   ChannelType,
@@ -17,6 +19,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  PermissionFlagsBits,
 } from "discord.js";
 import { randomBytes } from "node:crypto";
 import { logger } from "../lib/logger";
@@ -38,6 +41,176 @@ export async function setAnonymousChat(guildId: string, channelId: string): Prom
       target: anonymousChatTable.guildId,
       set: { channelId, enabled: true, updatedAt: new Date() },
     });
+}
+
+/** Yeni anonim kanal alanları için güvenli, tekrar çalıştırılabilir şema hazırlığı. */
+export async function ensureAnonymousSchema(): Promise<void> {
+  // Bazı kurulumlarda Drizzle şeması henüz push edilmemiş olabilir.
+  // Anonim özelliğinin açılışta güvenli şekilde hazırlanması için temel tabloları da oluştur.
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_chat (
+    guild_id text PRIMARY KEY, channel_id text NOT NULL, approval_channel_id text,
+    category_id text, enabled boolean NOT NULL DEFAULT true,
+    updated_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_accounts (
+    id text PRIMARY KEY, guild_id text NOT NULL, user_id text NOT NULL,
+    display_name text NOT NULL, webhook_id text NOT NULL, webhook_token text NOT NULL,
+    anonymous_number integer, private_channel_id text, active boolean NOT NULL DEFAULT true,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_pending (
+    id text PRIMARY KEY, guild_id text NOT NULL, channel_id text NOT NULL,
+    user_id text NOT NULL, content text NOT NULL, expires_at timestamp NOT NULL,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_blocks (
+    id serial PRIMARY KEY, user_id text NOT NULL, blocked_account_id text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_sessions (
+    id serial PRIMARY KEY, user_a_id text NOT NULL, user_a_account_id text NOT NULL,
+    user_b_id text NOT NULL, user_b_account_id text NOT NULL,
+    active boolean NOT NULL DEFAULT true, updated_at timestamp NOT NULL DEFAULT now(),
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`ALTER TABLE anonymous_chat
+    ADD COLUMN IF NOT EXISTS approval_channel_id text,
+    ADD COLUMN IF NOT EXISTS category_id text`);
+  await pool.query(`ALTER TABLE anonymous_accounts
+    ADD COLUMN IF NOT EXISTS anonymous_number integer,
+    ADD COLUMN IF NOT EXISTS private_channel_id text,
+    ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_messages (
+    id serial PRIMARY KEY,
+    guild_id text NOT NULL,
+    sender_account_id text NOT NULL,
+    source_message_id text NOT NULL UNIQUE,
+    general_message_id text NOT NULL,
+    recipient_message_ids text NOT NULL DEFAULT '{}',
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS anonymous_accounts_guild_user_unique
+    ON anonymous_accounts (guild_id, user_id)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS anonymous_accounts_guild_number_unique
+    ON anonymous_accounts (guild_id, anonymous_number) WHERE anonymous_number IS NOT NULL`);
+}
+
+export async function getAnonymousAccounts(guildId: string) {
+  return db.select().from(anonymousAccountsTable).where(and(
+    eq(anonymousAccountsTable.guildId, guildId),
+    eq(anonymousAccountsTable.active, true),
+  ));
+}
+
+async function nextAnonymousNumber(guildId: string): Promise<number> {
+  const rows = await db.select({ number: anonymousAccountsTable.anonymousNumber })
+    .from(anonymousAccountsTable).where(eq(anonymousAccountsTable.guildId, guildId));
+  const used = new Set(rows.map((r) => r.number).filter((n): n is number => n !== null));
+  for (let i = 1000; i <= 9999; i++) if (!used.has(i)) return i;
+  throw new Error("Anonim hesap numarası havuzu dolu.");
+}
+
+export async function createPrivateAnonymousChannel(
+  guild: Guild,
+  accountId: string,
+  userId: string,
+  categoryId?: string | null,
+): Promise<string> {
+  const existing = await getAnonymousAccountById(accountId);
+  if (!existing || existing.userId !== userId) throw new Error("Anonim hesap bulunamadı.");
+  if (existing.privateChannelId) {
+    const channel = await guild.channels.fetch(existing.privateChannelId).catch(() => null);
+    if (channel) return channel.id;
+  }
+  const botId = guild.client.user!.id;
+  const channel = await guild.channels.create({
+    name: `anonim-${existing.anonymousNumber ?? existing.id.slice(-4)}`,
+    type: ChannelType.GuildText,
+    parent: categoryId ?? undefined,
+    topic: "VBRI anonim sohbet özel kanalı — kullanıcı mesajları anonim sohbete aktarılır.",
+    permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: botId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] },
+    ],
+  });
+  await db.update(anonymousAccountsTable).set({ privateChannelId: channel.id })
+    .where(eq(anonymousAccountsTable.id, accountId));
+  return channel.id;
+}
+
+export async function createAnonymousAccountForUser(
+  guild: Guild,
+  userId: string,
+): Promise<{ account: any; created: boolean }> {
+  const current = await getAccount(guild.id, userId);
+  if (current?.active) return { account: current, created: false };
+  if (current && process.env.ANONYMOUS_ALLOW_REJOIN !== "false") {
+    await db.update(anonymousAccountsTable).set({ active: true }).where(eq(anonymousAccountsTable.id, current.id));
+    return { account: { ...current, active: true }, created: false };
+  }
+  const number = await nextAnonymousNumber(guild.id);
+  const account = {
+    id: `${guild.id}-${userId}`,
+    guildId: guild.id,
+    userId,
+    displayName: `Anonim #${number}`,
+    webhookId: "private-channel",
+    webhookToken: "private-channel",
+    anonymousNumber: number,
+    active: true,
+    createdAt: new Date(),
+  };
+  await db.insert(anonymousAccountsTable).values(account);
+  return { account, created: true };
+}
+
+export async function leaveAnonymousAccount(
+  guild: Guild,
+  userId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const account = await getAccount(guild.id, userId);
+  if (!account || !account.active) return { ok: false, message: "Aktif anonim hesabın bulunmuyor." };
+  await db.update(anonymousAccountsTable).set({ active: false })
+    .where(eq(anonymousAccountsTable.id, account.id));
+  if (account.privateChannelId) {
+    const channel = await guild.channels.fetch(account.privateChannelId).catch(() => null);
+    if (channel) await channel.delete("Anonim hesaptan ayrıldı").catch(() => null);
+  }
+  return { ok: true, message: "✅ Anonim hesaptan ayrıldın. Özel kanalın kapatıldı." };
+}
+
+export async function setupAnonymousApprovalPanel(
+  guild: Guild,
+  approvalChannelId: string,
+  generalChannelId: string,
+  categoryId?: string | null,
+): Promise<void> {
+  await setAnonymousChat(guild.id, generalChannelId);
+  await pool.query(
+    `UPDATE anonymous_chat SET approval_channel_id = $1, category_id = $2 WHERE guild_id = $3`,
+    [approvalChannelId, categoryId ?? null, guild.id],
+  );
+  const channel = await guild.channels.fetch(approvalChannelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) throw new Error("Onay kanalı bulunamadı.");
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`anon_create_account:${guild.id}`).setLabel("Anonim Hesap Oluştur").setStyle(ButtonStyle.Primary),
+  );
+  await channel.send({
+    embeds: [new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("🕵️ Anonim Sohbet")
+      .setDescription(
+        "Bu sistemde mesajların genel anonim sohbet kanalına **Anonim #numara** adıyla gönderilir.\n\n" +
+        "• Gerçek Discord kullanıcı adın, ID'n veya avatarın paylaşılmaz.\n" +
+        "• Mesaj yazmak için sana özel gizli kanalı kullanırsın.\n" +
+        "• Özel kanalındaki mesajlar anonim sohbette yayınlanır ve diğer mesajlar özel kanalına dağıtılır.\n" +
+        "• Katılarak anonim sohbet kurallarını kabul etmiş olursun."
+      )
+      .setFooter({ text: "Anonimlik için gerçek kimlik bilgilerini mesajlarında paylaşma." })
+      .setTimestamp()],
+    components: [row],
+  });
 }
 
 export async function disableAnonymousChat(guildId: string): Promise<void> {
@@ -351,7 +524,36 @@ export async function handleAnonymousButton(
   customId: string,
   userId: string,
   client: Message["client"],
-): Promise<{ handled: boolean; content?: string }> {
+): Promise<{ handled: boolean; content?: string; accountId?: string }> {
+  if (customId.startsWith("anon_create_account:")) {
+    const [, guildId] = customId.split(":");
+    const guild = await client.guilds.fetch(guildId!).catch(() => null);
+    if (!guild) return { handled: true, content: "❌ Sunucu bulunamadı." };
+    return { handled: true, content: "Anonim sohbet kurallarını kabul ediyor musun? Gerçek kimlik bilgilerini paylaşmaman gerektiğini ve mesajlarının dağıtılacağını kabul ederek devam edebilirsin." };
+  }
+  if (customId.startsWith("anon_confirm_account:")) {
+    const [, guildId] = customId.split(":");
+    const guild = await client.guilds.fetch(guildId!).catch(() => null);
+    if (!guild) return { handled: true, content: "❌ Sunucu bulunamadı." };
+    const result = await createAnonymousAccountForUser(guild, userId);
+    return {
+      handled: true, accountId: result.account.id,
+      content: result.created
+        ? `✅ Anonim hesabın başarıyla oluşturuldu: **${result.account.displayName}**\n\nAnonim sohbete katılmak için aşağıdaki **Sohbete Katıl** butonuna bas.`
+        : `ℹ️ Zaten bir anonim hesabın var: **${result.account.displayName}**\n\nSohbete katılmak için aşağıdaki **Sohbete Katıl** butonuna bas.`,
+    };
+  }
+  if (customId.startsWith("anon_join:")) {
+    const [, accountId, buttonUserId] = customId.split(":");
+    if (buttonUserId !== userId) return { handled: true, content: "❌ Bu buton sana ait değil." };
+    const account = await getAnonymousAccountById(accountId!);
+    if (!account || account.userId !== userId) return { handled: true, content: "❌ Anonim hesap bulunamadı." };
+    const guild = await client.guilds.fetch(account.guildId).catch(() => null);
+    if (!guild) return { handled: true, content: "❌ Sunucu bulunamadı." };
+    const settings = await getAnonymousChat(account.guildId);
+    const privateChannelId = await createPrivateAnonymousChannel(guild, account.id, userId, settings?.categoryId);
+    return { handled: true, content: `✅ Özel anonim kanalın hazır: <#${privateChannelId}>\nBu kanala yazdığın mesajlar anonim sohbete gönderilir.` };
+  }
   if (!customId.startsWith("anon_approve:") && !customId.startsWith("anon_deny:")) {
     return { handled: false };
   }
@@ -448,13 +650,52 @@ async function createAccount(message: Message) {
 export async function handleAnonymousMessage(message: Message): Promise<boolean> {
   if (!message.guildId || message.author.bot) return false;
   const settings = await getAnonymousChat(message.guildId);
-  if (!settings?.enabled || settings.channelId !== message.channelId) return false;
+  if (!settings?.enabled) return false;
   if (message.channel.type !== ChannelType.GuildText) return false;
 
   const channel = message.channel as TextChannel;
 
-  // Önce sil: webhook oluşturma/gönderme gecikmesi sırasında kullanıcı adı
-  // görünmesin. Silme başarısızsa orijinal mesajı anonim olarak kopyalamıyoruz.
+  // Özel anonim kanaldan genel kanala yayın.
+  const privateRows = await db.select().from(anonymousAccountsTable).where(and(
+    eq(anonymousAccountsTable.guildId, message.guildId),
+    eq(anonymousAccountsTable.privateChannelId, message.channelId),
+    eq(anonymousAccountsTable.active, true),
+  )).limit(1);
+  const privateAccount = privateRows[0];
+  if (privateAccount) {
+    const general = await message.guild!.channels.fetch(settings.channelId).catch(() => null);
+    if (!general || general.type !== ChannelType.GuildText) return true;
+    const content = message.content.trim().slice(0, 1900);
+    if (!content) return true;
+    const generalMessage = await (general as TextChannel).send({
+      content: `**${privateAccount.displayName}**\n«${content}»`,
+      allowedMentions: { parse: [] },
+    });
+    const recipients: Record<string, string> = {};
+    const accounts = await getAnonymousAccounts(message.guildId);
+    for (const recipient of accounts) {
+      if (recipient.id === privateAccount.id || !recipient.privateChannelId) continue;
+      const target = await message.guild!.channels.fetch(recipient.privateChannelId).catch(() => null);
+      if (!target || target.type !== ChannelType.GuildText) continue;
+      const copy = await (target as TextChannel).send({
+        content: `**${privateAccount.displayName}**\n«${content}»`,
+        allowedMentions: { parse: [] },
+      }).catch(() => null);
+      if (copy) recipients[recipient.id] = copy.id;
+    }
+    await db.insert(anonymousMessagesTable).values({
+      guildId: message.guildId,
+      senderAccountId: privateAccount.id,
+      sourceMessageId: message.id,
+      generalMessageId: generalMessage.id,
+      recipientMessageIds: JSON.stringify(recipients),
+    }).catch((err) => logger.warn({ err }, "Anonim mesaj eşleştirmesi kaydedilemedi"));
+    return true;
+  }
+
+  // Genel anonim kanala doğrudan yazılan gerçek kullanıcı mesajını hemen sil.
+  if (settings.channelId !== message.channelId) return false;
+
   try {
     await message.delete();
   } catch (err) {
@@ -468,20 +709,12 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
   let account = await getAccount(message.guildId, message.author.id);
   try {
     if (!account) {
-      const pendingId = await createPending(message);
-      const dm = await message.author.send({
-        content:
-          `🕵️ **Anonim profil oluşturma onayı**\n\n` +
-          `Bu sunucudaki anonim kanala gönderdiğin mesaj silindi ve yayınlanmayı bekliyor.\n` +
-          `Anonim profil oluşturulursa mesajın **${message.guild?.name ?? "bu sunucu"}** sunucusunda anonim olarak paylaşılacak.\n` +
-          `Profil fotoğrafı kullanılmayacak; varsayılan anonim avatar gösterilecek.\n\n` +
-          `Onay isteği 10 dakika geçerlidir.`,
-        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setCustomId(`anon_approve:${pendingId}:${message.author.id}`).setLabel("Anonim profili oluştur ve gönder").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`anon_deny:${pendingId}:${message.author.id}`).setLabel("İptal").setStyle(ButtonStyle.Danger),
-        )],
-      });
-      void dm;
+      const approval = settings.approvalChannelId
+        ? `<#${settings.approvalChannelId}> kanalındaki **Anonim Hesap Oluştur** butonuna bas`
+        : "`v!anon kur #onay #genel` ile sistem yöneticisinden onay panelini kurmasını iste";
+      await channel.send(`🕵️ Anonim mesaj göndermek için önce ${approval}.`)
+        .then((warning) => setTimeout(() => warning.delete().catch(() => null), 10000))
+        .catch(() => null);
       return true;
     }
 

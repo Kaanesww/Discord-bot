@@ -54,6 +54,8 @@ import { AuditLogEvent, type GuildMember } from "discord.js";
 import {
   getAnonymousChat, setAnonymousChat, disableAnonymousChat, anonymousStatus,
   handleAnonymousMessage, handleAnonymousButton, sendAnonymousProfileDm,
+  ensureAnonymousSchema, setupAnonymousApprovalPanel,
+  leaveAnonymousAccount,
   sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
@@ -3095,12 +3097,17 @@ async function pfxStat(m: Message, args: string[]): Promise<void> {
 
 async function pfxAnon(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId || !m.member) return;
+  const sub = args[0]?.toLowerCase();
+  if (sub === "ayrıl" || sub === "ayril" || sub === "çık" || sub === "cik") {
+    const result = await leaveAnonymousAccount(m.guild, m.author.id);
+    await m.reply(result.message);
+    return;
+  }
   if (!m.member.permissions.has("ManageChannels") && !isOwner(m.author.id)) {
     await m.reply("❌ Bu komut için **Manage Channels** yetkisine ihtiyacın var.");
     return;
   }
 
-  const sub = args[0]?.toLowerCase();
   if (sub === "durum" || sub === "status") {
     await m.reply(await anonymousStatus(m.guild));
     return;
@@ -3121,6 +3128,25 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "kur") {
+    const mentions = [...m.mentions.channels.values()].filter((c) => c.type === ChannelType.GuildText);
+    const approval = mentions[0];
+    const general = mentions[1];
+    const category = mentions[2];
+    if (!approval || !general) {
+      await m.reply("❌ Kullanım: `anon kur #onay-kanalı #anonim-genel [#kategori]`");
+      return;
+    }
+    try {
+      await setupAnonymousApprovalPanel(m.guild, approval.id, general.id, category?.id);
+      await m.reply(`✅ Anonim sistem hazır!\n• Onay: <#${approval.id}>\n• Genel sohbet: <#${general.id}>\n• Özel kanallar: ${category ? `<#${category.id}> kategorisinde` : "kategorisiz"}`);
+    } catch (err) {
+      logger.error({ err }, "Anonim sistem kurulamadı");
+      await m.reply("❌ Sistem kurulamadı. Botun kanal oluşturma, mesaj yönetimi ve izinleri yönetme yetkilerini kontrol et.");
+    }
+    return;
+  }
+
   // v!anon #kanal veya v!anon kur #kanal
   const channel = m.mentions.channels.first();
   if (channel && channel.type === ChannelType.GuildText) {
@@ -3130,6 +3156,7 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
   }
   await m.reply(
     "🕵️ **Anonim Sohbet Komutları:**\n" +
+    "`anon kur #onay #genel [#kategori]` — onay paneli ve sistemi kurar\n" +
     "`anon aç #kanal` — anonim sohbeti açar\n" +
     "`anon durum` — mevcut kanalı gösterir\n" +
     "`anon kapat` — anonim sohbeti kapatır",
@@ -3618,6 +3645,7 @@ export async function startBot(): Promise<void> {
   });
 
   client.once(Events.ClientReady, async (c) => {
+    await ensureAnonymousSchema().catch((err) => logger.error({ err }, "Anonim veritabanı şeması hazırlanamadı"));
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
 
     // Bot sahibini belirle (application owner)
@@ -3754,6 +3782,38 @@ export async function startBot(): Promise<void> {
     const { customId } = interaction;
 
     // Anonim profil onay/red butonları DM'den gelir.
+    if (customId.startsWith("anon_create_account:")) {
+      const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
+        logger.error({ err }, "Anonim hesap butonu hatası");
+        return { handled: true, content: "❌ İşlem sırasında hata oluştu." };
+      });
+      const guildId = customId.split(":")[1];
+      const components = [new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`anon_confirm_account:${guildId}:${interaction.user.id}`).setLabel("Kuralları Kabul Et ve Oluştur").setStyle(ButtonStyle.Success),
+      )];
+      await interaction.reply({ content: result.content ?? "İşlem tamamlandı.", components, ephemeral: true }).catch(() => null);
+      return;
+    }
+    if (customId.startsWith("anon_confirm_account:")) {
+      const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
+        logger.error({ err }, "Anonim hesap onay butonu hatası");
+        return { handled: true, content: "❌ Hesap oluşturulamadı." };
+      });
+      const components = result.accountId
+        ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`anon_join:${result.accountId}:${interaction.user.id}`).setLabel("Sohbete Katıl").setStyle(ButtonStyle.Success),
+        )] : [];
+      await interaction.update({ content: result.content ?? "İşlem tamamlandı.", components }).catch(() => null);
+      return;
+    }
+    if (customId.startsWith("anon_join:")) {
+      const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
+        logger.error({ err }, "Anonim kanal butonu hatası");
+        return { handled: true, content: "❌ Özel kanal oluşturulamadı." };
+      });
+      await interaction.reply({ content: result.content ?? "İşlem tamamlandı.", ephemeral: true }).catch(() => null);
+      return;
+    }
     if (customId.startsWith("anon_approve:") || customId.startsWith("anon_deny:")) {
       const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
         logger.error({ err }, "Anonim profil butonu hatası");
