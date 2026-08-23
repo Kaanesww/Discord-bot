@@ -737,7 +737,8 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const recipients: Record<string, string> = {};
     const accounts = await getAnonymousAccounts(message.guildId);
     for (const recipient of accounts) {
-      if (!recipient.privateChannelId) continue;
+      // Gönderen mesajı zaten kendi özel kanalında görüyor; tekrar kopyalama.
+      if (recipient.id === privateAccount.id || !recipient.privateChannelId) continue;
       const target = await message.guild!.channels.fetch(recipient.privateChannelId).catch(() => null);
       if (!target || target.type !== ChannelType.GuildText) continue;
       if (!recipient.webhookToken || recipient.webhookToken === "private-channel") continue;
