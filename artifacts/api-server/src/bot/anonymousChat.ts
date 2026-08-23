@@ -1,5 +1,10 @@
 import { db } from "@workspace/db";
-import { anonymousAccountsTable, anonymousChatTable, anonymousPendingTable } from "@workspace/db";
+import {
+  anonymousAccountsTable,
+  anonymousBlocksTable,
+  anonymousChatTable,
+  anonymousPendingTable,
+} from "@workspace/db";
 import { and, eq, lt } from "drizzle-orm";
 import {
   ChannelType,
@@ -68,9 +73,117 @@ async function createPending(message: Message): Promise<string> {
 
 export async function getAnonymousProfile(userId: string) {
   return db.select({
+    id: anonymousAccountsTable.id,
     displayName: anonymousAccountsTable.displayName,
     guildId: anonymousAccountsTable.guildId,
   }).from(anonymousAccountsTable).where(eq(anonymousAccountsTable.userId, userId));
+}
+
+export async function getAnonymousAccountById(id: string) {
+  const rows = await db.select().from(anonymousAccountsTable)
+    .where(eq(anonymousAccountsTable.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+function cleanAlias(value: string): string {
+  return value.trim().replace(/[\r\n]/g, " ").slice(0, 32);
+}
+
+export async function updateAnonymousProfile(
+  userId: string,
+  accountId: string,
+  displayName: string,
+): Promise<{ ok: boolean; message: string }> {
+  const alias = cleanAlias(displayName);
+  if (alias.length < 2) return { ok: false, message: "Profil adı en az 2 karakter olmalı." };
+  const account = await getAnonymousAccountById(accountId);
+  if (!account || account.userId !== userId) {
+    return { ok: false, message: "Bu anonim hesap sana ait değil veya bulunamadı." };
+  }
+  await db.update(anonymousAccountsTable)
+    .set({ displayName: alias })
+    .where(eq(anonymousAccountsTable.id, accountId));
+  return { ok: true, message: `Anonim profil adın **${alias}** olarak güncellendi.` };
+}
+
+export async function isAnonymousBlocked(userId: string, accountId: string): Promise<boolean> {
+  const rows = await db.select({ id: anonymousBlocksTable.id })
+    .from(anonymousBlocksTable)
+    .where(and(
+      eq(anonymousBlocksTable.userId, userId),
+      eq(anonymousBlocksTable.blockedAccountId, accountId),
+    )).limit(1);
+  return rows.length > 0;
+}
+
+export async function blockAnonymousAccount(
+  userId: string,
+  accountId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const account = await getAnonymousAccountById(accountId);
+  if (!account) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
+  if (account.userId === userId) return { ok: false, message: "Kendi hesabını kara listeye alamazsın." };
+  await db.insert(anonymousBlocksTable)
+    .values({ userId, blockedAccountId: accountId })
+    .onConflictDoNothing();
+  return { ok: true, message: `**${account.displayName}** kara listeye alındı. Bu hesaptan gelen anonim DM'ler engellenecek.` };
+}
+
+export async function unblockAnonymousAccount(
+  userId: string,
+  accountId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const deleted = await db.delete(anonymousBlocksTable)
+    .where(and(
+      eq(anonymousBlocksTable.userId, userId),
+      eq(anonymousBlocksTable.blockedAccountId, accountId),
+    )).returning({ id: anonymousBlocksTable.id });
+  return deleted.length
+    ? { ok: true, message: `Anonim hesap **${accountId}** kara listeden çıkarıldı.` }
+    : { ok: false, message: "Bu hesap kara listende değil." };
+}
+
+export async function getBlockedAnonymousAccounts(userId: string) {
+  return db.select({
+    accountId: anonymousBlocksTable.blockedAccountId,
+    displayName: anonymousAccountsTable.displayName,
+  }).from(anonymousBlocksTable)
+    .leftJoin(
+      anonymousAccountsTable,
+      eq(anonymousAccountsTable.id, anonymousBlocksTable.blockedAccountId),
+    )
+    .where(eq(anonymousBlocksTable.userId, userId));
+}
+
+export async function sendAnonymousMessage(
+  senderUserId: string,
+  targetAccountId: string,
+  content: string,
+  client: Message["client"],
+): Promise<{ ok: boolean; message: string }> {
+  const target = await getAnonymousAccountById(targetAccountId);
+  if (!target) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
+  if (target.userId === senderUserId) return { ok: false, message: "Kendi anonim hesabına mesaj gönderemezsin." };
+  if (await isAnonymousBlocked(target.userId, targetAccountId)) {
+    return { ok: false, message: "Bu anonim hesap, anonim DM'leri kabul etmiyor." };
+  }
+
+  const senderProfiles = await getAnonymousProfile(senderUserId);
+  const senderProfile = senderProfiles[0];
+  if (!senderProfile) {
+    return { ok: false, message: "Önce anonim bir profil oluşturmalısın. Bir sunucunun anonim kanalında ilk mesajını gönderip onayla." };
+  }
+
+  const recipient = await client.users.fetch(target.userId);
+  await recipient.send({
+    content:
+      `🕵️ **Anonim mesajın var**\n\n` +
+      `Gönderen: **${senderProfile.displayName}**\n` +
+      `Gönderen anonim hesap ID'si: \`${senderProfile.id}\`\n\n` +
+      content.trim().slice(0, 1900) +
+      `\n\nYanıt almak istemiyorsan: \`v!anon karaliste ekle ${senderProfile.id}\``,
+  });
+  return { ok: true, message: `✅ Mesajın **${target.displayName}** hesabına anonim olarak gönderildi.` };
 }
 
 export async function sendAnonymousProfileDm(userId: string, client: Message["client"]): Promise<void> {
@@ -89,6 +202,7 @@ export async function sendAnonymousProfileDm(userId: string, client: Message["cl
     {
       content: `🕵️ **Anonim Profil Bilgilerin**\n` +
         `Anonim profil sayısı: **${profiles.length}**\n` +
+        `Hesap ID'leri:\n${profiles.map(p => `• \`${p.id}\` — **${p.displayName}**`).join("\n")}\n` +
         `Kullanıldığı sunucular:\n${serverNames.join("\n")}\n\n` +
         `Profil fotoğrafın anonim varsayılan avatar olarak gösterilir.`,
       embeds: [new EmbedBuilder()

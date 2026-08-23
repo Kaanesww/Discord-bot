@@ -53,6 +53,8 @@ import { AuditLogEvent, type GuildMember } from "discord.js";
 import {
   getAnonymousChat, setAnonymousChat, disableAnonymousChat, anonymousStatus,
   handleAnonymousMessage, handleAnonymousButton, sendAnonymousProfileDm,
+  sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
+  unblockAnonymousAccount, getBlockedAnonymousAccounts,
 } from "./anonymousChat";
 import {
   getTagRoleSettings,
@@ -3846,16 +3848,74 @@ export async function startBot(): Promise<void> {
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
 
-    // DM: kullanıcı anonim profilini ve anonim kullanılan sunucuları görebilir.
+    // DM: anonim profil, anonim hesaba mesaj ve kara liste işlemleri.
     if (!message.guildId) {
       const dmArgs = message.content.trim().split(/\s+/);
       const dmCmd = dmArgs.shift()?.toLowerCase();
       if (dmCmd === "v!anon" || dmCmd === "v!anonim") {
         const sub = dmArgs[0]?.toLowerCase();
         if (sub === "profil" || sub === "profile" || sub === "bilgi") {
-          await sendAnonymousProfileDm(message.author.id, client);
+          const profileSub = dmArgs[1]?.toLowerCase();
+          if (profileSub === "düzenle" || profileSub === "duzenle" || profileSub === "edit") {
+            const accountId = dmArgs[2];
+            const displayName = dmArgs.slice(3).join(" ");
+            if (!accountId || !displayName) {
+              await message.author.send("Kullanım: `v!anon profil düzenle <hesap-id> <yeni-ad>`").catch(() => null);
+            } else {
+              const result = await updateAnonymousProfile(message.author.id, accountId, displayName);
+              await message.author.send(`${result.ok ? "✅" : "❌"} ${result.message}`).catch(() => null);
+            }
+          } else {
+            await sendAnonymousProfileDm(message.author.id, client);
+          }
+        } else if (sub === "mesaj" || sub === "dm" || sub === "gönder" || sub === "gonder") {
+          const accountId = dmArgs[1];
+          const content = dmArgs.slice(2).join(" ").trim();
+          if (!accountId || !content) {
+            await message.author.send(
+              "Kullanım: `v!anon mesaj <anonim-hesap-id> <mesaj>`\n" +
+              "Örnek: `v!anon mesaj 123456789-987654321 Merhaba!`",
+            ).catch(() => null);
+          } else {
+            const result = await sendAnonymousMessage(message.author.id, accountId, content, client);
+            await message.author.send(`${result.ok ? "✅" : "❌"} ${result.message}`).catch(() => null);
+          }
+        } else if (sub === "karaliste" || sub === "kara" || sub === "blacklist") {
+          const action = dmArgs[1]?.toLowerCase();
+          const accountId = dmArgs[2];
+          if (action === "liste" || action === "list") {
+            const blocked = await getBlockedAnonymousAccounts(message.author.id);
+            await message.author.send(
+              blocked.length
+                ? `🚫 **Anonim kara listen:**\n${blocked.map(b => `• \`${b.accountId}\` — **${b.displayName ?? "Silinmiş hesap"}**`).join("\n")}`
+                : "✅ Anonim kara listen boş.",
+            ).catch(() => null);
+          } else if (action === "ekle" || action === "add" || action === "kaldır" || action === "kaldir" || action === "remove") {
+            if (!accountId) {
+              await message.author.send("Kullanım: `v!anon karaliste ekle/kaldir <anonim-hesap-id>`").catch(() => null);
+            } else {
+              const result = action === "ekle" || action === "add"
+                ? await blockAnonymousAccount(message.author.id, accountId)
+                : await unblockAnonymousAccount(message.author.id, accountId);
+              await message.author.send(`${result.ok ? "✅" : "❌"} ${result.message}`).catch(() => null);
+            }
+          } else {
+            await message.author.send(
+              "Kullanım: `v!anon karaliste liste`\n" +
+              "`v!anon karaliste ekle <id>`\n" +
+              "`v!anon karaliste kaldir <id>`",
+            ).catch(() => null);
+          }
         } else {
-          await message.author.send("DM kullanımı: `v!anon profil`").catch(() => null);
+          await message.author.send(
+            "🕵️ **Anonim DM kullanımı**\n" +
+            "`v!anon profil` — Hesap ID'lerini ve profillerini gösterir\n" +
+            "`v!anon profil düzenle <id> <ad>` — Profil adını değiştirir\n" +
+            "`v!anon mesaj <id> <mesaj>` — Anonim hesaba DM gönderir\n" +
+            "`v!anon karaliste liste` — Engellediklerini gösterir\n" +
+            "`v!anon karaliste ekle <id>` — Bu hesaptan mesaj alma\n" +
+            "`v!anon karaliste kaldir <id>` — Engeli kaldırır",
+          ).catch(() => null);
         }
       }
       return;

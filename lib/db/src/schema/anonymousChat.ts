@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, serial, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const anonymousChatTable = pgTable("anonymous_chat", {
   guildId: text("guild_id").primaryKey(),
@@ -27,6 +27,17 @@ export const anonymousPendingTable = pgTable("anonymous_pending", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const anonymousBlocksTable = pgTable("anonymous_blocks", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  blockedAccountId: text("blocked_account_id").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  uniqueBlock: uniqueIndex("anonymous_blocks_user_account_unique")
+    .on(table.userId, table.blockedAccountId),
+}));
+
 export type AnonymousChat = typeof anonymousChatTable.$inferSelect;
 export type AnonymousAccount = typeof anonymousAccountsTable.$inferSelect;
 export type AnonymousPending = typeof anonymousPendingTable.$inferSelect;
+export type AnonymousBlock = typeof anonymousBlocksTable.$inferSelect;
