@@ -1,6 +1,6 @@
-import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, primaryKey } from "drizzle-orm/pg-core";
 
-export const levelRolesTable = sqliteTable(
+export const levelRolesTable = pgTable(
   "level_roles",
   {
     guildId: text("guild_id").notNull(),

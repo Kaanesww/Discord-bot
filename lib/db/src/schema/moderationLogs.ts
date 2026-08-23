@@ -1,15 +1,15 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, boolean, timestamp, serial } from "drizzle-orm/pg-core";
 
-export const moderationLogsTable = sqliteTable("moderation_logs", {
-  id:          integer("id").primaryKey({ autoIncrement: true }),
+export const moderationLogsTable = pgTable("moderation_logs", {
+  id:          serial("id").primaryKey(),
   guildId:     text("guild_id").notNull(),
   userId:      text("user_id").notNull(),
   moderatorId: text("moderator_id").notNull(),
-  action:      text("action").notNull(), // warn | kick | ban | unban | timeout | untimeout
+  action:      text("action").notNull(),
   reason:      text("reason"),
-  duration:    integer("duration"),      // dakika (timeout için)
-  active:      integer("active", { mode: "boolean" }).notNull().default(true),
-  createdAt:   integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  duration:    integer("duration"),
+  active:      boolean("active").notNull().default(true),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
 });
 
 export type ModerationLog = typeof moderationLogsTable.$inferSelect;
