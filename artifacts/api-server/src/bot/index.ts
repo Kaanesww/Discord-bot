@@ -3,6 +3,7 @@ import {
   AttachmentBuilder, TextChannel, ChannelType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   PermissionFlagsBits, EmbedBuilder,
+  Partials,
   type Message,
 } from "discord.js";
 import { readFileSync } from "fs";
@@ -3606,11 +3607,14 @@ export async function startBot(): Promise<void> {
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages,
       GatewayIntentBits.GuildVoiceStates,
       GatewayIntentBits.GuildMessageReactions,
       GatewayIntentBits.GuildModeration,
       GatewayIntentBits.GuildPresences,
     ],
+    // DM kanalları cache'de bulunmadığı için partial olarak alınmalı.
+    partials: [Partials.Channel],
   });
 
   client.once(Events.ClientReady, async (c) => {
