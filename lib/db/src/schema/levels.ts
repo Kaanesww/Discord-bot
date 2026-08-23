@@ -1,6 +1,6 @@
-import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, timestamp, primaryKey } from "drizzle-orm/pg-core";
 
-export const levelsTable = sqliteTable(
+export const levelsTable = pgTable(
   "levels",
   {
     userId:       text("user_id").notNull(),
@@ -8,7 +8,7 @@ export const levelsTable = sqliteTable(
     xp:           integer("xp").notNull().default(0),
     level:        integer("level").notNull().default(0),
     messageCount: integer("message_count").notNull().default(0),
-    updatedAt:    integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+    updatedAt:    timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.userId, table.guildId] })],
 );

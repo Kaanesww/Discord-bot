@@ -1,13 +1,13 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, timestamp } from "drizzle-orm/pg-core";
 
-export const economyTable = sqliteTable("economy", {
+export const economyTable = pgTable("economy", {
   userId:        text("user_id").primaryKey(),
   coins:         integer("coins").notNull().default(0),
-  lastDaily:     integer("last_daily", { mode: "timestamp" }),
+  lastDaily:     timestamp("last_daily"),
   streak:        integer("streak").notNull().default(0),
   luck:          integer("luck").notNull().default(0),
-  luckExpiresAt: integer("luck_expires_at", { mode: "timestamp" }),
-  prayUsedAt:    integer("pray_used_at", { mode: "timestamp" }),
+  luckExpiresAt: timestamp("luck_expires_at"),
+  prayUsedAt:    timestamp("pray_used_at"),
   econXp:        integer("econ_xp").notNull().default(0),
   econLevel:     integer("econ_level").notNull().default(0),
 });

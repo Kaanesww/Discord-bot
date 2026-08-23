@@ -1,66 +1,44 @@
-# VBRI Discord Bot
+# [Project name]
 
-A Turkish-language Discord bot system with a web dashboard. Features XP-based leveling, economy (coins, blackjack, roulette, duels), moderation, and canvas-generated profile/rank cards.
+_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
 
 ## Run & Operate
 
-- API server + bot start automatically via the **`artifacts/api-server: API Server`** workflow
-- Dashboard starts automatically via the **`artifacts/bot-dashboard: web`** workflow
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack
 
-- pnpm workspaces, Node.js 20, TypeScript 5.9
-- **Bot/API**: Express 5, Discord.js 14, @napi-rs/canvas (image cards)
-- **DB**: SQLite (local file at `data/bot.db`) + Drizzle ORM (libsql/turso dialect)
-- **Dashboard**: React 19, Vite, Tailwind CSS 4, Shadcn UI
-- **Validation**: Zod, drizzle-zod
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- pnpm workspaces, Node.js 24, TypeScript 5.9
+- API: Express 5
+- DB: PostgreSQL + Drizzle ORM
+- Validation: Zod (`zod/v4`), `drizzle-zod`
+- API codegen: Orval (from OpenAPI spec)
+- Build: esbuild (CJS bundle)
 
 ## Where things live
 
-- `artifacts/api-server/src/bot/` — bot entry point, all commands, leveling, economy, moderation
-- `artifacts/api-server/src/bot/commands/` — individual command files
-- `artifacts/api-server/src/routes/` — Express API routes
-- `artifacts/bot-dashboard/src/` — React dashboard frontend
-- `lib/db/src/schema/` — Drizzle ORM schema (economy, guilds, levels, moderation, levelRoles, giveaways)
-- `artifacts/api-server/src/bot/giveaway.ts` — çekiliş sistemi (DB + zamanlayıcı + otomatik bitiş)
-- `artifacts/api-server/src/bot/giveawayCard.ts` — çekiliş canvas görseli (her 30sn yenilenir)
-- `lib/api-spec/` — OpenAPI spec (source of truth for API contracts)
-
-## Required env
-
-- `DISCORD_TOKEN` — bot token
-- `DISCORD_CLIENT_ID` — Discord application ID
-- `GEMINI_API_KEY` — Google Gemini API key (used for AI chat features)
-- No database URL needed — DB is a local SQLite file (`data/bot.db`)
-
-## Bot invite URL
-
-Logged in the API server console on startup (check workflow logs).
+_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
 
 ## Architecture decisions
 
-- Bot runs inside the same process as the Express API server (`artifacts/api-server/src/index.ts`)
-- All canvas image generation uses `@napi-rs/canvas` (not browser Canvas API)
-- Prefix is per-guild, stored in `guildSettings` table; default is `v!`
-- **Only prefix commands** — no slash commands. Default prefix `v!` (per-guild via `setprefix`)
+_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+
+## Product
+
+_Describe the high-level user-facing capabilities of this app once they exist._
 
 ## User preferences
 
-- Commands should be prefix-based (not slash), default prefix `v!`
-- Help menu should be category-based with per-category images
-- Economy system should have luck mechanic with `pray` command
+_Populate as you build — explicit user instructions worth remembering across sessions._
 
 ## Gotchas
 
-- The API server builds via esbuild before starting (`pnpm run build` inside the dev script) — first startup is slow (~1-2s)
-- `PORT` env var must be set; the managed workflow injects it automatically (8080 for API, 3000 for dashboard)
-- After any command change, restart the `artifacts/api-server: API Server` workflow
+_Populate as you build — sharp edges, "always run X before Y" rules._
 
 ## Pointers
 

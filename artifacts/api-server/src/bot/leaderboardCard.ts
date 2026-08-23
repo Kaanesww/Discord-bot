@@ -25,8 +25,8 @@ export interface LeaderboardEntry {
   xpNeeded: number;
 }
 
-const MEDAL_COLORS = ["#ffd700", "#c0c0c0", "#cd7f32"];
-const RANK_BG = ["rgba(255,215,0,0.15)", "rgba(192,192,192,0.12)", "rgba(205,127,50,0.12)"];
+const MEDAL_COLORS = ["#ffffff", "#bdbdbd", "#858585"];
+const RANK_BG = ["rgba(255,255,255,0.16)", "rgba(190,190,190,0.12)", "rgba(130,130,130,0.12)"];
 
 export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Promise<Buffer> {
   const W = 760;
@@ -39,16 +39,16 @@ export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Prom
 
   // Arka plan
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#0d0d1a");
-  bg.addColorStop(0.5, "#1a1a3e");
-  bg.addColorStop(1, "#0d1020");
+  bg.addColorStop(0, "#050505");
+  bg.addColorStop(0.5, "#191919");
+  bg.addColorStop(1, "#060606");
   roundRect(ctx, 0, 0, W, H, 20);
   ctx.fillStyle = bg;
   ctx.fill();
 
   // Dekoratif glow (üstte altın)
   const topGlow = ctx.createRadialGradient(W / 2, 0, 0, W / 2, 0, 220);
-  topGlow.addColorStop(0, "rgba(255,215,0,0.18)");
+  topGlow.addColorStop(0, "rgba(255,255,255,0.10)");
   topGlow.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = topGlow;
   ctx.fillRect(0, 0, W, H);
@@ -58,7 +58,7 @@ export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Prom
   roundRect(ctx, 16, 14, W - 32, HEADER_H - 20, 12);
   ctx.fill();
 
-  ctx.fillStyle = "#ffd700";
+  ctx.fillStyle = "#ffffff";
   ctx.font = "bold 32px sans-serif";
   ctx.textAlign = "center";
   ctx.fillText("🏆  SUNUCU LİDERBOARD", W / 2, 60);
@@ -111,7 +111,7 @@ export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Prom
       const img = await loadImage(entry.avatarUrl + "?size=64");
       ctx.drawImage(img, avX - avR, avY - avR, avR * 2, avR * 2);
     } catch {
-      ctx.fillStyle = "#5865f2";
+      ctx.fillStyle = "#666666";
       ctx.fillRect(avX - avR, avY - avR, avR * 2, avR * 2);
       ctx.fillStyle = "#fff";
       ctx.font = "bold 16px sans-serif";
@@ -150,7 +150,7 @@ export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Prom
     if (progress > 0) {
       const grad = ctx.createLinearGradient(barX, 0, barX + barW * progress, 0);
       grad.addColorStop(0, isTop3 ? MEDAL_COLORS[i]! : "#5865f2");
-      grad.addColorStop(1, "#eb459e");
+      grad.addColorStop(1, "#777777");
       roundRect(ctx, barX, barY, Math.max(barW * progress, barH), barH, barH / 2);
       ctx.fillStyle = grad;
       ctx.fill();
@@ -166,7 +166,7 @@ export async function generateLeaderboardCard(entries: LeaderboardEntry[]): Prom
     ctx.textAlign = "right";
 
     // Seviye
-    const lvlColor = isTop3 ? MEDAL_COLORS[i]! : "#5865f2";
+    const lvlColor = isTop3 ? MEDAL_COLORS[i]! : "#bdbdbd";
     ctx.fillStyle = lvlColor + "33";
     roundRect(ctx, rightX - 80, rankCY - 20, 84, 26, 8);
     ctx.fill();

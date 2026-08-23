@@ -6,12 +6,7 @@
  * 2. Katman: Gemini ile niyet tespiti (doğal dil, yavaş)
  */
 
-import { GoogleGenAI } from "@google/genai";
 import { logger } from "../lib/logger";
-
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenAI({ apiKey: apiKey! });
-const MODEL = "gemini-3.1-flash-lite";
 
 // ── Komut açıklamaları (niyet tespiti için) ───────────────────────────────────
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
@@ -116,22 +111,12 @@ ${cmdList}
 
 Cevap (sadece komut adı veya YOK):`;
 
-  try {
-    const response = await genAI.models.generateContent({
-      model: MODEL,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { maxOutputTokens: 20, temperature: 0 },
-    });
-    const result = response.text?.trim().toLowerCase().replace(/[^a-z0-9ğüşıöç!]/g, "") ?? "";
-    const found = ALL_COMMANDS.find(c => c === result) ?? null;
-    intentCache.set(cacheKey, found);
-    // Cache 1 saat sonra silinsin (bellek tasarrufu)
-    setTimeout(() => intentCache.delete(cacheKey), 3_600_000);
-    return found;
-  } catch (err) {
-    logger.debug({ err }, "fuzzyCmd: Gemini niyet tespiti başarısız");
-    return null;
-  }
+  // Gemini is optional. The deterministic fuzzy layer remains fully functional
+  // when no AI integration is configured.
+  logger.debug({ promptLength: prompt.length }, "fuzzyCmd: AI intent layer unavailable");
+  intentCache.set(cacheKey, null);
+  setTimeout(() => intentCache.delete(cacheKey), 3_600_000);
+  return null;
 }
 
 // ── Ana fonksiyon ─────────────────────────────────────────────────────────────
