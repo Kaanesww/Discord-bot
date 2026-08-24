@@ -369,6 +369,31 @@ async function getOrCreateGeneralWebhook(
   return new WebhookClient({ id: webhookId, token: webhookToken });
 }
 
+async function getOrCreatePrivateWebhook(
+  guild: Guild,
+  account: { id: string; privateChannelId: string | null; privateWebhookId: string | null; privateWebhookToken: string | null },
+): Promise<WebhookClient | null> {
+  if (!account.privateChannelId) return null;
+  const channel = await guild.channels.fetch(account.privateChannelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) return null;
+  let webhookId = account.privateWebhookId;
+  let webhookToken = account.privateWebhookToken;
+  if (!webhookId || !webhookToken) {
+    const created = await (channel as TextChannel).createWebhook({
+      name: "Anonim Sohbet",
+      avatar: "https://cdn.discordapp.com/embed/avatars/0.png",
+      reason: "Eksik anonim özel kanal webhook'u otomatik tamamlandı",
+    });
+    webhookId = created.id;
+    webhookToken = created.token!;
+    await db.update(anonymousAccountsTable).set({
+      privateWebhookId: webhookId,
+      privateWebhookToken: webhookToken,
+    }).where(eq(anonymousAccountsTable.id, account.id));
+  }
+  return new WebhookClient({ id: webhookId, token: webhookToken });
+}
+
 export async function resetAnonymousChannel(
   guild: Guild,
   channelId?: string,
@@ -735,17 +760,16 @@ export async function relayAnonymousChannelMessage(message: Message): Promise<bo
     eq(anonymousAccountsTable.active, true),
   )).limit(1);
   const recipientAccount = recipientAccounts[0];
-  if (!recipientAccount?.privateWebhookId || !recipientAccount.privateWebhookToken) {
+  const privateWebhook = recipientAccount
+    ? await getOrCreatePrivateWebhook(message.guild, recipientAccount)
+    : null;
+  if (!privateWebhook) {
     await (recipient as TextChannel).send({
-      content: "❌ Özel anonim mesaj webhook'u hazır değil. `v!anon aç #kanal` komutuyla anonim kanalı yeniden aç.",
+      content: "❌ Karşı tarafın anonim özel kanalı bulunamadı; sohbet kapatıldı.",
       allowedMentions: { parse: [] },
     }).catch(() => null);
     return true;
   }
-  const privateWebhook = new WebhookClient({
-    id: recipientAccount.privateWebhookId,
-    token: recipientAccount.privateWebhookToken,
-  });
   await privateWebhook.send({
     content,
     username: anonymousPublicName(senderAccount),
@@ -1197,7 +1221,6 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const content = message.content.trim().slice(0, 1900);
     if (!content) return true;
     const generalWebhook = await getOrCreateGeneralWebhook(message.guild, general as TextChannel, settings);
-    if (!privateAccount.webhookToken || privateAccount.webhookToken === "private-channel") return true;
     const generalMessage = await generalWebhook.send({
       content,
       username: anonymousPublicName(privateAccount),
@@ -1216,8 +1239,8 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       if (recipient.id === privateAccount.id || !recipient.privateChannelId) continue;
       const target = await message.guild!.channels.fetch(recipient.privateChannelId).catch(() => null);
       if (!target || target.type !== ChannelType.GuildText) continue;
-      if (!recipient.webhookToken || recipient.webhookToken === "private-channel") continue;
-      const copyWebhook = new WebhookClient({ id: recipient.webhookId, token: recipient.webhookToken });
+      const copyWebhook = await getOrCreatePrivateWebhook(message.guild, recipient);
+      if (!copyWebhook) continue;
       const copy = await copyWebhook.send({
         content,
         username: anonymousPublicName(privateAccount),
