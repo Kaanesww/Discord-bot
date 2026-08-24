@@ -63,6 +63,7 @@ import {
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
   relayAnonymousConversationMessage,
+  relayAnonymousChannelMessage, requestAnonymousConversation, resolveAnonymousConversation,
   requestAnonymousIdChange, resolveAnonymousIdChange, getAnonymousPointLeaderboard,
 } from "./anonymousChat";
 import {
@@ -3222,6 +3223,18 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
   );
 }
 
+async function pfxSohbet(m: Message, args: string[]): Promise<void> {
+  if (!m.guild) return;
+  const action = args[0]?.toLowerCase();
+  const targetId = action === "et" || action === "baslat" || action === "başlat" ? args[1] : args[0];
+  if (!targetId) {
+    await m.reply("❌ Kullanım: `v!sohbet et #ANONİM-ID`");
+    return;
+  }
+  const result = await requestAnonymousConversation(m.guild, m.author.id, m.channelId, targetId);
+  await m.reply({ content: `${result.ok ? "✅" : "❌"} ${result.message}` });
+}
+
 // ── ÇEKİLİŞ ──────────────────────────────────────────────────────────────────
 
 async function pfxCekilis(m: Message, args: string[]): Promise<void> {
@@ -3540,6 +3553,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   anon: pfxAnon, anonim: pfxAnon,
   anonpuan: async (m) => pfxAnon(m, ["sıralama"]),
   anonsiralama: async (m) => pfxAnon(m, ["sıralama"]),
+  sohbet: pfxSohbet, anonsohbet: pfxSohbet,
   anonprofil: async (m) => pfxAnon(m, ["profil"]),
   // Kanal oluşturma
   kanalac: pfxKanalAc, kanaloluştur: pfxKanalAc, kanalyap: pfxKanalAc, createchannel: pfxKanalAc,
@@ -3991,6 +4005,32 @@ export async function startBot(): Promise<void> {
       }).catch(() => null);
       return;
     }
+    if (customId.startsWith("anon_chat_approve:") || customId.startsWith("anon_chat_reject:")) {
+      const [action, requestId, buttonUserId] = customId.split(":");
+      if (buttonUserId !== interaction.user.id || !interaction.guild) {
+        await interaction.reply({ content: "❌ Bu buton sana ait değil.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.deferUpdate().catch(() => null);
+      const result = await resolveAnonymousConversation(
+        interaction.guild,
+        requestId!,
+        interaction.user.id,
+        action === "anon_chat_approve",
+      ).catch((err) => {
+        logger.error({ err }, "Anonim sohbet butonu hatası");
+        return { ok: false, message: "İşlem sırasında hata oluştu." };
+      });
+      await interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setColor(result.ok ? (action === "anon_chat_approve" ? 0x57f287 : 0x72767d) : 0xed4245)
+          .setTitle(action === "anon_chat_approve" ? "✅ Anonim sohbet onaylandı" : action === "anon_chat_reject" ? "❌ Anonim sohbet reddedildi" : "⚠️ Anonim sohbet işlemi")
+          .setDescription(result.message)
+          .setTimestamp()],
+        components: [],
+      }).catch(() => null);
+      return;
+    }
     if (customId.startsWith("anon_approve:") || customId.startsWith("anon_deny:")) {
       const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
         logger.error({ err }, "Anonim profil butonu hatası");
@@ -4325,6 +4365,14 @@ export async function startBot(): Promise<void> {
         return;
       }
     }
+
+    // Anonim özel sohbet aktarımı, genel anonim kanal işleyicisinden önce gelir.
+    // Özel sohbet kanallarındaki mesajlar genel sohbete düşmemelidir.
+    const anonymousChannelRelayed = await relayAnonymousChannelMessage(message).catch((err) => {
+      logger.error({ err }, "Anonim özel kanal aktarım hatası");
+      return false;
+    });
+    if (anonymousChannelRelayed) return;
 
     // Anonim kanal: komutlardan sonra, guard ve XP'den önce işlenir.
     // Böylece anonim kanaldaki normal mesajlar kullanıcı adı görünmeden gider.
