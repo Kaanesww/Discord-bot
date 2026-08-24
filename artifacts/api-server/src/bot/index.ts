@@ -62,6 +62,7 @@ import {
   sendAnonymousMessage, updateAnonymousProfile, blockAnonymousAccount,
   unblockAnonymousAccount, getBlockedAnonymousAccounts,
   startAnonymousConversation, stopAnonymousConversation,
+  closeAnonymousChannelConversation,
   relayAnonymousConversationMessage,
   relayAnonymousChannelMessage, requestAnonymousConversation, resolveAnonymousConversation,
   requestAnonymousIdChange, resolveAnonymousIdChange, getAnonymousPointLeaderboard,
