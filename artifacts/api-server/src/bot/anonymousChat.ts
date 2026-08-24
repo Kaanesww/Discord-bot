@@ -542,7 +542,7 @@ export async function requestAnonymousConversation(
       { id: botId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
     ],
   });
-  const requestId = `${guild.id}-${requesterId}-${target.userId}-${Date.now()}`;
+  const requestId = `anon-${randomBytes(12).toString("hex")}`;
   await db.delete(anonymousConversationRequestsTable).where(or(
     eq(anonymousConversationRequestsTable.requesterId, requesterId),
     eq(anonymousConversationRequestsTable.targetId, target.userId),
