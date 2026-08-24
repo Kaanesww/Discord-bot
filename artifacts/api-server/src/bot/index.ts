@@ -65,6 +65,7 @@ import {
   relayAnonymousConversationMessage,
   relayAnonymousChannelMessage, requestAnonymousConversation, resolveAnonymousConversation,
   requestAnonymousIdChange, resolveAnonymousIdChange, getAnonymousPointLeaderboard,
+  grantAnonymousPoints,
 } from "./anonymousChat";
 import {
   getTagRoleSettings,
@@ -2845,7 +2846,7 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
   if (catKey) {
     const embed = buildHelpCategoryEmbed(prefix, catKey);
     if (!embed) {
-      await m.reply(`❌ Kategori bulunamadı. Mevcut kategoriler: \`moderasyon\` \`seviye\` \`ekonomi\` \`oyunlar\` \`muzik\` \`yonetim\``);
+       await m.reply(`❌ Kategori bulunamadı. Mevcut kategoriler: ${HELP_CATEGORIES.map((cat) => `\`${cat.key}\``).join(" ")}`);
       return;
     }
     // Kategori kartı + geri dön butonu
@@ -3118,7 +3119,7 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
       .setColor(0xffc857)
       .setTitle("🕵️ Anonim Puan Sıralaması")
       .setDescription(rows.length
-        ? rows.map((row, i) => `${i + 1}. **${row.anonymousId ?? row.displayName}** — ⭐ **${row.points} puan**`).join("\n")
+        ? rows.map((row, i) => `${i + 1}. **Anonim #${(row.anonymousId ?? "00000").padStart(5, "0").slice(-5)}** — ⭐ **${row.points} puan**`).join("\n")
         : "Henüz anonim mesaj gönderen yok.")
       .setFooter({ text: "Anonim özel kanalından gönderilen her mesaj 1 puan kazandırır." })
       .setTimestamp();
@@ -3131,6 +3132,33 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     if (!account || account.privateChannelId !== m.channelId) return;
     const embed = await getAnonymousProfileEmbed(m.guildId, m.author.id);
     if (embed) await m.reply({ embeds: [embed] });
+    return;
+  }
+  if (sub === "id" || sub === "kimlik") {
+    const account = await getOwnAnonymousProfile(m.guildId, m.author.id);
+    if (!account || account.privateChannelId !== m.channelId) {
+      await m.reply("❌ Bu komut yalnızca kendi anonim özel kanalında kullanılabilir.");
+      return;
+    }
+    const requestedId = args[1];
+    if (!requestedId) {
+      await m.reply("Kullanım: `v!anon id <5-haneli-yeni-id>` — Değişiklik ücreti: **50 puan**.");
+      return;
+    }
+    const result = await requestAnonymousIdChange(m.author.id, requestedId);
+    if (!result.ok || !result.requestId) {
+      await m.reply(`❌ ${result.message}`);
+      return;
+    }
+    await m.reply({
+      embeds: [new EmbedBuilder().setColor(0xffc857).setTitle("🕵️ Anonim ID Değişikliği")
+        .setDescription(`Yeni kimliğin **Anonim #${requestedId}** olacak. Onaylarsan 50 puan harcanır.`)
+        .setFooter({ text: "Onaylamak için aşağıdaki butona bas." })],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`anon_id_approve:${result.requestId}:${m.author.id}`).setLabel("✅ Onayla (50 puan)").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`anon_id_deny:${result.requestId}:${m.author.id}`).setLabel("❌ Reddet").setStyle(ButtonStyle.Danger),
+      )],
+    });
     return;
   }
   if (sub === "foto" || sub === "avatar" || sub === "fotoğraf" || sub === "fotograf") {
@@ -3221,6 +3249,15 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     "`anon kapat` — anonim sohbeti kapatır\n" +
     "`anon sıralama` — anonim puan sıralamasını gösterir",
   );
+}
+
+async function pfxAnonPuanVer(m: Message, args: string[]): Promise<void> {
+  if (!isOwner(m.author.id)) {
+    await m.reply("❌ Bu komut yalnızca bot sahibine açıktır.");
+    return;
+  }
+  const result = await grantAnonymousPoints(args[0]?.replace(/^#/, "") ?? "", Number(args[1]));
+  await m.reply(result.message);
 }
 
 async function pfxSohbet(m: Message, args: string[]): Promise<void> {
@@ -3553,6 +3590,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   anon: pfxAnon, anonim: pfxAnon,
   anonpuan: async (m) => pfxAnon(m, ["sıralama"]),
   anonsiralama: async (m) => pfxAnon(m, ["sıralama"]),
+  anonpuanver: pfxAnonPuanVer,
   sohbet: pfxSohbet, anonsohbet: pfxSohbet,
   anonprofil: async (m) => pfxAnon(m, ["profil"]),
   // Kanal oluşturma
@@ -4191,7 +4229,7 @@ export async function startBot(): Promise<void> {
           if (!requestedId) {
             await message.author.send(
               "Kullanım: `v!anon id <yeni-id>`\n" +
-              "ID 3-20 karakter olmalı ve yalnızca harf/rakam içermeli. Değişiklik ücreti: **50 puan**.",
+              "ID tam olarak 5 rakam olmalı. Örnek: `01234`. Değişiklik ücreti: **50 puan**.",
             ).catch(() => null);
           } else {
             const result = await requestAnonymousIdChange(message.author.id, requestedId);
@@ -4280,7 +4318,7 @@ export async function startBot(): Promise<void> {
             "🕵️ **Anonim DM kullanımı**\n" +
             "`v!anon profil` — Hesap ID'lerini ve profillerini gösterir\n" +
             "`v!anon profil düzenle <id> <ad>` — Profil adını değiştirir\n" +
-            "`v!anon id <yeni-id>` — Anonim ID'ni 50 puan karşılığında değiştirir\n" +
+            "`v!anon id <5-rakam>` — Anonim #00000 ID'ni 50 puan karşılığında değiştirir\n" +
             "`v!anon mesaj <id> <mesaj>` — Anonim hesaba DM gönderir\n" +
             "`v!anon sıralama` — Anonim puan sıralamasını gösterir\n" +
             "`v!anon karaliste liste` — Engellediklerini gösterir\n" +

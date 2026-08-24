@@ -149,7 +149,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    key: "guard", label: "Guard", icon: "🛡️",
+    key: "guard-extra", label: "Guard", icon: "🛡️",
     color: "#f04747", gradient: ["#f0474733", "#f0474711"],
     commands: [
       { name: "guard",                        desc: "Tüm koruma ayarlarını göster" },
@@ -164,7 +164,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    key: "stat", label: "Stat Kanalları", icon: "📊",
+    key: "stat-extra", label: "Stat Kanalları", icon: "📊",
     color: "#00b0f4", gradient: ["#00b0f433", "#00b0f411"],
     commands: [
       { name: "stat",                    desc: "İstatistik kanallarını kur" },
@@ -209,13 +209,14 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "anon durum", desc: "Anonim sohbet durumunu gösterir" },
       { name: "DM: v!anon profil", desc: "Anonim profil hesap ID'lerini gösterir" },
       { name: "DM: v!anon profil düzenle <id> <ad>", desc: "Anonim profil adını düzenler" },
-      { name: "DM: v!anon id <yeni-id>", desc: "ID değiştirir (50 puan, onaylı)" },
+      { name: "v!anon id <5-rakam>", desc: "Anonim #00000 kimliğini değiştirir (50 puan, onaylı)" },
       { name: "DM: v!anon mesaj <id> <mesaj>", desc: "Anonim hesap ID'sine DM gönderir" },
       { name: "v!anon sıralama", desc: "Anonim puan sıralamasını gösterir" },
       { name: "DM: v!anon sıralama", desc: "Anonim puan sıralamasını DM'de gösterir" },
       { name: "DM: v!anon karaliste ekle <id>", desc: "Bir anonim hesaptan gelen DM'leri engeller" },
       { name: "DM: v!anon karaliste kaldir <id>", desc: "Anonim hesap engelini kaldırır" },
       { name: "DM: v!anon karaliste liste", desc: "Engellenen anonim hesapları listeler" },
+      { name: "v!anonpuanver <id> <miktar>", desc: "Bot sahibi anonim hesaba puan verir" },
     ],
   },
   {

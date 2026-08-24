@@ -118,9 +118,11 @@ export async function ensureAnonymousSchema(): Promise<void> {
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_conversation_requests (
     id text PRIMARY KEY, guild_id text NOT NULL, requester_id text NOT NULL,
     requester_account_id text NOT NULL, target_id text NOT NULL, target_account_id text NOT NULL,
-    requester_channel_id text NOT NULL, expires_at timestamp NOT NULL,
+    requester_channel_id text NOT NULL, approval_channel_id text, expires_at timestamp NOT NULL,
     created_at timestamp NOT NULL DEFAULT now()
   )`);
+  await pool.query(`ALTER TABLE anonymous_conversation_requests
+    ADD COLUMN IF NOT EXISTS approval_channel_id text`);
 }
 
 export async function getAnonymousAccounts(guildId: string) {
@@ -134,7 +136,7 @@ async function nextAnonymousNumber(guildId: string): Promise<number> {
   const rows = await db.select({ number: anonymousAccountsTable.anonymousNumber })
     .from(anonymousAccountsTable).where(eq(anonymousAccountsTable.guildId, guildId));
   const used = new Set(rows.map((r) => r.number).filter((n): n is number => n !== null));
-  for (let i = 1000; i <= 9999; i++) if (!used.has(i)) return i;
+  for (let i = 10000; i <= 99999; i++) if (!used.has(i)) return i;
   throw new Error("Anonim hesap numarası havuzu dolu.");
 }
 
@@ -203,10 +205,11 @@ export async function createAnonymousAccountForUser(
     id: `${guild.id}-${userId}`,
     guildId: guild.id,
     userId,
-    displayName: `Anonim #${number}`,
+    displayName: "Anonim",
     webhookId: "private-channel",
     webhookToken: "private-channel",
     anonymousNumber: number,
+    anonymousId: String(number).padStart(5, "0"),
     active: true,
     createdAt: new Date(),
   };
@@ -244,10 +247,10 @@ export async function getAnonymousProfileEmbed(guildId: string, userId: string):
   return new EmbedBuilder()
     .setColor(0x5865f2)
     .setThumbnail(account.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png")
-    .setTitle(`🕵️ ${account.anonymousId ?? account.displayName}`)
+    .setTitle(`🕵️ ${anonymousPublicName(account)}`)
     .setDescription("Bu profil anonim sistemdeki kimliğindir. Gerçek Discord hesabın diğer kullanıcılara gösterilmez.")
     .addFields(
-      { name: "Anonim Kimlik", value: account.anonymousId ?? account.displayName, inline: true },
+      { name: "Anonim Kimlik", value: anonymousPublicName(account), inline: true },
       { name: "Puan", value: `⭐ **${account.points}**`, inline: true },
       { name: "Durum", value: account.active ? "🟢 Aktif" : "🔴 Pasif", inline: true },
       { name: "Mesaj Sayısı", value: `${account.points} anonim mesaj`, inline: true },
@@ -398,7 +401,7 @@ function cleanAnonymousId(value: string): string {
 }
 
 function publicAnonymousId(account: { anonymousId: string | null; displayName: string }): string {
-  return account.anonymousId ?? account.displayName;
+  return anonymousPublicName(account);
 }
 
 export async function requestAnonymousIdChange(
@@ -406,8 +409,8 @@ export async function requestAnonymousIdChange(
   requestedId: string,
 ): Promise<{ ok: boolean; message: string; requestId?: string; accountId?: string }> {
   const normalized = cleanAnonymousId(requestedId);
-  if (!/^[A-Z0-9]{3,20}$/.test(normalized)) {
-    return { ok: false, message: "Anonim ID yalnızca 3-20 harf veya rakam içerebilir." };
+  if (!/^\d{5}$/.test(normalized)) {
+    return { ok: false, message: "Anonim ID tam olarak 5 rakam olmalı. Örnek: 01234" };
   }
   const accounts = await db.select().from(anonymousAccountsTable)
     .where(and(eq(anonymousAccountsTable.userId, userId), eq(anonymousAccountsTable.active, true))).limit(1);
@@ -466,8 +469,30 @@ export async function getAnonymousPointLeaderboard(limit = 10) {
     .limit(limit);
 }
 
+export async function grantAnonymousPoints(
+  anonymousId: string,
+  amount: number,
+): Promise<{ ok: boolean; message: string }> {
+  if (!/^\d{5}$/.test(anonymousId) || !Number.isInteger(amount) || amount < 1 || amount > 100000) {
+    return { ok: false, message: "Kullanım: `v!anonpuanver <5-haneli-id> <1-100000>`" };
+  }
+  const result = await pool.query(
+    `UPDATE anonymous_accounts
+     SET points = points + $1
+     WHERE anonymous_id = $2 AND active = true
+     RETURNING display_name, anonymous_id, points`,
+    [amount, anonymousId],
+  );
+  if (!result.rowCount) return { ok: false, message: "Bu 5 haneli anonim ID bulunamadı." };
+  return {
+    ok: true,
+    message: `✅ **Anonim #${anonymousId}** hesabına **${amount} puan** verildi. Yeni puan: **${result.rows[0].points}**.`,
+  };
+}
+
 function anonymousPublicName(account: { anonymousId: string | null; displayName: string }): string {
-  return account.anonymousId ?? account.displayName;
+  const id = account.anonymousId ?? account.displayName.match(/\d+/)?.[0] ?? "00000";
+  return `Anonim #${id.padStart(5, "0").slice(-5)}`;
 }
 
 export async function requestAnonymousConversation(
@@ -504,10 +529,19 @@ export async function requestAnonymousConversation(
   )).limit(1);
   if (active.length) return { ok: false, message: "Bu kullanıcılardan biri zaten aktif bir anonim sohbette." };
 
-  const targetChannel = await guild.channels.fetch(target.privateChannelId).catch(() => null);
-  if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
-    return { ok: false, message: "Hedef kullanıcının özel anonim kanalı bulunamadı." };
-  }
+  const settings = await getAnonymousChat(guild.id);
+  const botId = guild.client.user!.id;
+  const approvalChannel = await guild.channels.create({
+    name: `anon-onay-${normalized}`,
+    type: ChannelType.GuildText,
+    parent: settings?.categoryId ?? undefined,
+    topic: "Anonim sohbet isteği onay kanalı.",
+    permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: target.userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: botId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+    ],
+  });
   const requestId = `${guild.id}-${requesterId}-${target.userId}-${Date.now()}`;
   await db.delete(anonymousConversationRequestsTable).where(or(
     eq(anonymousConversationRequestsTable.requesterId, requesterId),
@@ -521,9 +555,10 @@ export async function requestAnonymousConversation(
     targetId: target.userId,
     targetAccountId: target.id,
     requesterChannelId,
+    approvalChannelId: approvalChannel.id,
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
-  await (targetChannel as TextChannel).send({
+  await approvalChannel.send({
     embeds: [new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle("🕵️ Anonim özel sohbet isteği")
@@ -557,6 +592,10 @@ export async function resolveAnonymousConversation(
     return { ok: false, message: "Bu sohbet isteğinin süresi dolmuş." };
   }
   await db.delete(anonymousConversationRequestsTable).where(eq(anonymousConversationRequestsTable.id, request.id));
+  if (request.approvalChannelId) {
+    const approvalChannel = await guild.channels.fetch(request.approvalChannelId).catch(() => null);
+    await approvalChannel?.delete("Anonim sohbet isteği sonuçlandı").catch(() => null);
+  }
   if (!approve) return { ok: true, message: "Anonim özel sohbet isteği reddedildi." };
 
   const requester = await getAnonymousAccountById(request.requesterAccountId);
@@ -955,7 +994,7 @@ export async function handleAnonymousButton(
   const webhook = new WebhookClient({ id: account.webhookId, token: account.webhookToken });
   await webhook.send({
     content: pending.content,
-    username: account.anonymousId ?? account.displayName,
+    username: anonymousPublicName(account),
     avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
     allowedMentions: { parse: [] },
   });
@@ -968,14 +1007,17 @@ async function createAccountFromPending(guild: Guild, channel: TextChannel, user
     name: "Anonim Sohbet",
     reason: "Anonim sohbet için kullanıcıya özel profil",
   });
+  const number = await nextAnonymousNumber(guild.id);
   const account = {
     id: `${guild.id}-${userId}`,
     guildId: guild.id,
     userId,
-    displayName: makeAlias(),
+      displayName: "Anonim",
     webhookId: webhook.id,
     webhookToken: webhook.token!,
     createdAt: new Date(),
+    anonymousNumber: number,
+    anonymousId: String(number).padStart(5, "0"),
   };
   await db.insert(anonymousAccountsTable).values(account);
   return account;
@@ -996,21 +1038,23 @@ async function createAccount(message: Message) {
     name: "Anonim Sohbet",
     reason: "Anonim sohbet için kullanıcıya özel profil",
   });
-  const alias = makeAlias();
+  const number = await nextAnonymousNumber(message.guildId!);
   const account = {
     id: `${message.guildId}-${message.author.id}`,
     guildId: message.guildId!,
     userId: message.author.id,
-    displayName: alias,
+    displayName: "Anonim",
     webhookId: webhook.id,
     webhookToken: webhook.token!,
+    anonymousNumber: number,
+    anonymousId: String(number).padStart(5, "0"),
     createdAt: new Date(),
   };
   await db.insert(anonymousAccountsTable).values(account)
     .onConflictDoUpdate({
       target: anonymousAccountsTable.id,
       set: {
-        displayName: alias,
+        displayName: "Anonim",
         webhookId: webhook.id,
         webhookToken: webhook.token!,
       },
@@ -1062,7 +1106,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     const generalWebhook = new WebhookClient({ id: generalWebhookId, token: generalWebhookToken });
     const generalMessage = await generalWebhook.send({
       content,
-      username: privateAccount.anonymousId ?? privateAccount.displayName,
+      username: anonymousPublicName(privateAccount),
       avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
       wait: true,
@@ -1082,7 +1126,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       const copyWebhook = new WebhookClient({ id: recipient.webhookId, token: recipient.webhookToken });
       const copy = await copyWebhook.send({
         content,
-        username: privateAccount.anonymousId ?? privateAccount.displayName,
+        username: anonymousPublicName(privateAccount),
         avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
         allowedMentions: { parse: [] },
         wait: true,
@@ -1131,7 +1175,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     });
     await webhook.send({
       content: message.content.slice(0, 2000),
-      username: account.anonymousId ?? account.displayName,
+      username: anonymousPublicName(account),
       // Gerçek profil fotoğrafı kullanılmaz; anonimlik güçlendirilir.
       avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },

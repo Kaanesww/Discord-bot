@@ -93,6 +93,7 @@ export const anonymousConversationRequestsTable = pgTable("anonymous_conversatio
   targetId: text("target_id").notNull(),
   targetAccountId: text("target_account_id").notNull(),
   requesterChannelId: text("requester_channel_id").notNull(),
+  approvalChannelId: text("approval_channel_id"),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
