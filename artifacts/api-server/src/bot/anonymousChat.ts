@@ -605,7 +605,8 @@ export async function requestAnonymousConversation(
   if (await isAnonymousBlocked(target.userId, requester.id)) {
     return { ok: false, message: "Bu anonim kullanıcı senden mesaj almayı engellemiş." };
   }
-  const active = await db.select({ id: anonymousSessionsTable.id }).from(anonymousSessionsTable).where(and(
+  const activeSessions = await db.select().from(anonymousSessionsTable).where(and(
+    eq(anonymousSessionsTable.guildId, guild.id),
     eq(anonymousSessionsTable.active, true),
     or(
       eq(anonymousSessionsTable.userAId, requesterId),
@@ -613,8 +614,21 @@ export async function requestAnonymousConversation(
       eq(anonymousSessionsTable.userAId, target.userId),
       eq(anonymousSessionsTable.userBId, target.userId),
     ),
-  )).limit(1);
-  if (active.length) return { ok: false, message: "Bu kullanıcılardan biri zaten aktif bir anonim sohbette." };
+  ));
+  for (const session of activeSessions) {
+    const channelsExist = Boolean(
+      session.channelAId &&
+      session.channelBId &&
+      await guild.channels.fetch(session.channelAId).catch(() => null) &&
+      await guild.channels.fetch(session.channelBId).catch(() => null),
+    );
+    if (channelsExist) {
+      return { ok: false, message: "Bu kullanıcılardan biri zaten aktif bir anonim sohbette." };
+    }
+    await db.update(anonymousSessionsTable)
+      .set({ active: false, updatedAt: new Date() })
+      .where(eq(anonymousSessionsTable.id, session.id));
+  }
 
   const settings = await getAnonymousChat(guild.id);
   const botId = guild.client.user!.id;
