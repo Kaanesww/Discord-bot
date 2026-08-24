@@ -217,6 +217,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "DM: v!anon karaliste kaldir <id>", desc: "Anonim hesap engelini kaldırır" },
       { name: "DM: v!anon karaliste liste", desc: "Engellenen anonim hesapları listeler" },
       { name: "v!anonpuanver <id> <miktar>", desc: "Bot sahibi anonim hesaba puan verir" },
+      { name: "özel #<5-haneli-id>", desc: "Anonim kullanıcıyla özel sohbet isteği gönderir" },
+      { name: "özel durum", desc: "Aktif özel sohbet durumunu gösterir" },
+      { name: "özel kapat", desc: "Aktif anonim özel sohbeti kapatır" },
     ],
   },
   {

@@ -852,6 +852,32 @@ export async function stopAnonymousConversation(userId: string): Promise<boolean
   return result.length > 0;
 }
 
+export async function closeAnonymousChannelConversation(
+  guild: Guild,
+  userId: string,
+): Promise<boolean> {
+  const rows = await db.select().from(anonymousSessionsTable).where(and(
+    eq(anonymousSessionsTable.active, true),
+    or(
+      eq(anonymousSessionsTable.userAId, userId),
+      eq(anonymousSessionsTable.userBId, userId),
+    ),
+  )).limit(1);
+  const session = rows[0];
+  if (!session) return false;
+
+  await db.update(anonymousSessionsTable)
+    .set({ active: false, updatedAt: new Date() })
+    .where(eq(anonymousSessionsTable.id, session.id));
+
+  for (const channelId of [session.channelAId, session.channelBId, session.relayChannelId]) {
+    if (!channelId) continue;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    await channel?.delete("Anonim özel sohbet kapatıldı").catch(() => null);
+  }
+  return true;
+}
+
 export async function relayAnonymousConversationMessage(
   message: Message,
   client: Message["client"],
