@@ -59,7 +59,7 @@ export async function ensureAnonymousSchema(): Promise<void> {
     id text PRIMARY KEY, guild_id text NOT NULL, user_id text NOT NULL,
     display_name text NOT NULL, webhook_id text NOT NULL, webhook_token text NOT NULL,
     anonymous_number integer, private_channel_id text, points integer NOT NULL DEFAULT 0,
-    avatar_url text,
+     avatar_url text, private_webhook_id text, private_webhook_token text,
     active boolean NOT NULL DEFAULT true,
     created_at timestamp NOT NULL DEFAULT now()
   )`);
@@ -94,6 +94,8 @@ export async function ensureAnonymousSchema(): Promise<void> {
     ADD COLUMN IF NOT EXISTS private_channel_id text,
     ADD COLUMN IF NOT EXISTS points integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS avatar_url text,
+     ADD COLUMN IF NOT EXISTS private_webhook_id text,
+     ADD COLUMN IF NOT EXISTS private_webhook_token text,
     ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_messages (
     id serial PRIMARY KEY,
@@ -151,14 +153,14 @@ export async function createPrivateAnonymousChannel(
   if (existing.privateChannelId) {
     const channel = await guild.channels.fetch(existing.privateChannelId).catch(() => null);
     if (channel && channel.type === ChannelType.GuildText) {
-      if (!existing.webhookToken || existing.webhookToken === "private-channel") {
+      if (!existing.privateWebhookToken) {
         const webhook = await (channel as TextChannel).createWebhook({
-          name: existing.displayName,
+          name: "Anonim Sohbet",
           avatar: "https://cdn.discordapp.com/embed/avatars/0.png",
           reason: "Anonim hesap özel profil webhook'u",
         });
         await db.update(anonymousAccountsTable).set({
-          webhookId: webhook.id, webhookToken: webhook.token!,
+          privateWebhookId: webhook.id, privateWebhookToken: webhook.token!,
         }).where(eq(anonymousAccountsTable.id, accountId));
       }
       return channel.id;
@@ -177,15 +179,14 @@ export async function createPrivateAnonymousChannel(
     ],
   });
   const webhook = await channel.createWebhook({
-    name: existing.displayName,
+    name: "Anonim Sohbet",
     avatar: "https://cdn.discordapp.com/embed/avatars/0.png",
     reason: "Anonim hesap özel profil webhook'u",
   });
-  await db.update(anonymousAccountsTable).set({ privateChannelId: channel.id })
-    .where(eq(anonymousAccountsTable.id, accountId));
   await db.update(anonymousAccountsTable).set({
-    webhookId: webhook.id,
-    webhookToken: webhook.token!,
+    privateChannelId: channel.id,
+    privateWebhookId: webhook.id,
+    privateWebhookToken: webhook.token!,
   }).where(eq(anonymousAccountsTable.id, accountId));
   return channel.id;
 }
@@ -665,11 +666,32 @@ export async function relayAnonymousChannelMessage(message: Message): Promise<bo
     : null;
   const content = message.content.trim().slice(0, 1900);
   if (!content || !senderAccount || !recipient || recipient.type !== ChannelType.GuildText) return true;
-  const payload = {
-    content: `🕵️ **#${anonymousPublicName(senderAccount)}**\n${content}`,
-    allowedMentions: { parse: [] as never[] },
-  };
-  await (recipient as TextChannel).send(payload).catch(() => null);
+  await message.delete().catch(() => null);
+
+  const recipientAccounts = await db.select().from(anonymousAccountsTable).where(and(
+    eq(anonymousAccountsTable.guildId, message.guildId),
+    eq(anonymousAccountsTable.privateChannelId, recipientChannelId),
+    eq(anonymousAccountsTable.active, true),
+  )).limit(1);
+  const recipientAccount = recipientAccounts[0];
+  if (!recipientAccount?.privateWebhookId || !recipientAccount.privateWebhookToken) {
+    await (recipient as TextChannel).send({
+      content: "❌ Özel anonim mesaj webhook'u hazır değil. `v!anon aç #kanal` komutuyla anonim kanalı yeniden aç.",
+      allowedMentions: { parse: [] },
+    }).catch(() => null);
+    return true;
+  }
+  const privateWebhook = new WebhookClient({
+    id: recipientAccount.privateWebhookId,
+    token: recipientAccount.privateWebhookToken,
+  });
+  await privateWebhook.send({
+    content,
+    username: anonymousPublicName(senderAccount),
+    avatarURL: senderAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
+    allowedMentions: { parse: [] },
+  }).catch(() => null);
+  privateWebhook.destroy();
   if (relay && relay.type === ChannelType.GuildText) {
     await (relay as TextChannel).send({ content: `[${anonymousPublicName(senderAccount)}] ${content}`, allowedMentions: { parse: [] } }).catch(() => null);
   }
