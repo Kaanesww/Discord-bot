@@ -73,13 +73,14 @@ export async function ensureAnonymousSchema(): Promise<void> {
     created_at timestamp NOT NULL DEFAULT now()
   )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS anonymous_sessions (
-    id serial PRIMARY KEY, user_a_id text NOT NULL, user_a_account_id text NOT NULL,
+    id serial PRIMARY KEY, guild_id text, user_a_id text NOT NULL, user_a_account_id text NOT NULL,
     user_b_id text NOT NULL, user_b_account_id text NOT NULL,
     channel_a_id text, channel_b_id text, relay_channel_id text,
     active boolean NOT NULL DEFAULT true, updated_at timestamp NOT NULL DEFAULT now(),
     created_at timestamp NOT NULL DEFAULT now()
   )`);
   await pool.query(`ALTER TABLE anonymous_sessions
+    ADD COLUMN IF NOT EXISTS guild_id text,
     ADD COLUMN IF NOT EXISTS channel_a_id text,
     ADD COLUMN IF NOT EXISTS channel_b_id text,
     ADD COLUMN IF NOT EXISTS relay_channel_id text`);
@@ -737,6 +738,7 @@ export async function resolveAnonymousConversation(
     eq(anonymousSessionsTable.userBId, request.targetId),
   ));
   await db.insert(anonymousSessionsTable).values({
+    guildId: guild.id,
     userAId: request.requesterId, userAAccountId: request.requesterAccountId,
     userBId: request.targetId, userBAccountId: request.targetAccountId,
     channelAId: channelA.id, channelBId: channelB.id, relayChannelId: relay.id,

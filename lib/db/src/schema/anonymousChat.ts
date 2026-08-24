@@ -75,6 +75,7 @@ export const anonymousBlocksTable = pgTable("anonymous_blocks", {
 
 export const anonymousSessionsTable = pgTable("anonymous_sessions", {
   id: serial("id").primaryKey(),
+  guildId: text("guild_id"),
   userAId: text("user_a_id").notNull(),
   userAAccountId: text("user_a_account_id").notNull(),
   userBId: text("user_b_id").notNull(),
