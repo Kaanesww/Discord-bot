@@ -346,6 +346,67 @@ export async function setupAnonymousApprovalPanel(
   });
 }
 
+async function getOrCreateGeneralWebhook(
+  guild: Guild,
+  channel: TextChannel,
+  settings: { generalWebhookId: string | null; generalWebhookToken: string | null },
+): Promise<WebhookClient> {
+  let webhookId = settings.generalWebhookId;
+  let webhookToken = settings.generalWebhookToken;
+  if (!webhookId || !webhookToken) {
+    const created = await channel.createWebhook({
+      name: "Anonim Sohbet",
+      avatar: "https://cdn.discordapp.com/embed/avatars/0.png",
+      reason: "Anonim genel sohbet profil webhook'u",
+    });
+    webhookId = created.id;
+    webhookToken = created.token!;
+    await pool.query(
+      `UPDATE anonymous_chat SET general_webhook_id = $1, general_webhook_token = $2 WHERE guild_id = $3`,
+      [webhookId, webhookToken, guild.id],
+    );
+  }
+  return new WebhookClient({ id: webhookId, token: webhookToken });
+}
+
+export async function resetAnonymousChannel(
+  guild: Guild,
+  channelId?: string,
+): Promise<string> {
+  const current = await getAnonymousChat(guild.id);
+  const selectedChannelId = channelId ?? current?.channelId;
+  if (!selectedChannelId) throw new Error("Genel anonim sohbet kanalı belirtilmedi.");
+
+  if (current?.generalWebhookId && current.generalWebhookToken) {
+    const oldWebhook = new WebhookClient({
+      id: current.generalWebhookId,
+      token: current.generalWebhookToken,
+    });
+    await oldWebhook.delete("Anonim genel sohbet kanalı sıfırlandı").catch(() => null);
+    oldWebhook.destroy();
+  }
+
+  await db.insert(anonymousChatTable)
+    .values({
+      guildId: guild.id,
+      channelId: selectedChannelId,
+      enabled: true,
+      generalWebhookId: null,
+      generalWebhookToken: null,
+    })
+    .onConflictDoUpdate({
+      target: anonymousChatTable.guildId,
+      set: {
+        channelId: selectedChannelId,
+        enabled: true,
+        generalWebhookId: null,
+        generalWebhookToken: null,
+        updatedAt: new Date(),
+      },
+    });
+  return selectedChannelId;
+}
+
 export async function disableAnonymousChat(guildId: string): Promise<void> {
   await db.update(anonymousChatTable)
     .set({ enabled: false, updatedAt: new Date() })
@@ -1135,23 +1196,8 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     if (!general || general.type !== ChannelType.GuildText) return true;
     const content = message.content.trim().slice(0, 1900);
     if (!content) return true;
-    let generalWebhookId = settings.generalWebhookId;
-    let generalWebhookToken = settings.generalWebhookToken;
-    if (!generalWebhookId || !generalWebhookToken) {
-      const created = await (general as TextChannel).createWebhook({
-        name: "Anonim Sohbet",
-        avatar: "https://cdn.discordapp.com/embed/avatars/0.png",
-        reason: "Anonim genel sohbet profil webhook'u",
-      });
-      generalWebhookId = created.id;
-      generalWebhookToken = created.token!;
-      await pool.query(
-        `UPDATE anonymous_chat SET general_webhook_id = $1, general_webhook_token = $2 WHERE guild_id = $3`,
-        [generalWebhookId, generalWebhookToken, message.guildId],
-      );
-    }
+    const generalWebhook = await getOrCreateGeneralWebhook(message.guild, general as TextChannel, settings);
     if (!privateAccount.webhookToken || privateAccount.webhookToken === "private-channel") return true;
-    const generalWebhook = new WebhookClient({ id: generalWebhookId, token: generalWebhookToken });
     const generalMessage = await generalWebhook.send({
       content,
       username: anonymousPublicName(privateAccount),
@@ -1217,18 +1263,14 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       return true;
     }
 
-    const webhook = new WebhookClient({
-      id: account.webhookId,
-      token: account.webhookToken,
-    });
-    await webhook.send({
+    const generalWebhook = await getOrCreateGeneralWebhook(message.guild, channel, settings);
+    await generalWebhook.send({
       content: message.content.slice(0, 2000),
       username: anonymousPublicName(account),
-      // Gerçek profil fotoğrafı kullanılmaz; anonimlik güçlendirilir.
-      avatarURL: "https://cdn.discordapp.com/embed/avatars/0.png",
+      avatarURL: account.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
     });
-    webhook.destroy();
+    generalWebhook.destroy();
 
     return true;
   } catch (err) {

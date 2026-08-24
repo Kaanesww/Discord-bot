@@ -205,6 +205,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     color: "#5865f2", gradient: ["#5865f233", "#5865f211"],
     commands: [
       { name: "anon aç #kanal", desc: "Anonim genel sohbet kanalını açar (Admin)" },
+      { name: "anon kur #onay #genel [#kategori]", desc: "Anonim onay panelini ve kanallarını kurar (Admin)" },
+      { name: "anon sıfırla #kanal", desc: "Genel anonim kanalını ve webhook bağlantısını sıfırlar (Admin)" },
       { name: "anon kapat", desc: "Anonim genel sohbeti kapatır (Admin)" },
       { name: "anon durum", desc: "Anonim sohbet durumunu gösterir" },
       { name: "DM: v!anon profil", desc: "Anonim profil hesap ID'lerini gösterir" },

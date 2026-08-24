@@ -53,7 +53,7 @@ import { generateWarnCard } from "./warnCard";
 import { applyAutoRoles, getAutoRoles, getAllAutoRoles, addAutoRole, removeAutoRole, toggleAutoRole, clearAutoRoles } from "./autoRole";
 import { AuditLogEvent, type GuildMember } from "discord.js";
 import {
-  getAnonymousChat, setAnonymousChat, disableAnonymousChat, anonymousStatus,
+  getAnonymousChat, setAnonymousChat, resetAnonymousChannel, disableAnonymousChat, anonymousStatus,
   handleAnonymousMessage, handleAnonymousButton, sendAnonymousProfileDm,
   ensureAnonymousSchema, setupAnonymousApprovalPanel,
   leaveAnonymousAccount,
@@ -3188,6 +3188,21 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     await m.reply(await anonymousStatus(m.guild));
     return;
   }
+  if (sub === "sıfırla" || sub === "sifirla" || sub === "reset") {
+    const channel = m.mentions.channels.first();
+    if (channel && channel.type !== ChannelType.GuildText) {
+      await m.reply("❌ Sıfırlanacak kanal bir metin kanalı olmalı.");
+      return;
+    }
+    try {
+      const channelId = await resetAnonymousChannel(m.guild, channel?.id);
+      await m.reply(`✅ Anonim genel sohbet sıfırlandı ve yeniden hazırlandı: <#${channelId}>\nEski webhook bağlantısı temizlendi. Şimdi mesajlar bu kanala düşmeli.`);
+    } catch (err) {
+      logger.error({ err }, "Anonim kanal sıfırlanamadı");
+      await m.reply("❌ Kanal sıfırlanamadı. Kullanım: `v!anon sıfırla #genel`");
+    }
+    return;
+  }
   if (sub === "kapat" || sub === "kapat") {
     await disableAnonymousChat(m.guildId);
     await m.reply("🔴 Anonim genel sohbet kapatıldı.");
@@ -3247,6 +3262,7 @@ async function pfxAnon(m: Message, args: string[]): Promise<void> {
     "`anon kur #onay #genel [#kategori]` — onay paneli ve sistemi kurar\n" +
     "`anon aç #kanal` — anonim sohbeti açar\n" +
     "`anon durum` — mevcut kanalı gösterir\n" +
+    "`anon sıfırla #kanal` — genel kanal webhook bağlantısını temizleyip yeniden kurar\n" +
     "`anon kapat` — anonim sohbeti kapatır\n" +
     "`anon sıralama` — anonim puan sıralamasını gösterir",
   );
