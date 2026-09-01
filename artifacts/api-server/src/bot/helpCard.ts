@@ -161,6 +161,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "guard rol aç",                 desc: "Toplu rol saldırısını tespit et" },
       { name: "guard kanal aç",               desc: "Toplu kanal saldırısını tespit et" },
       { name: "guard log #kanal",             desc: "Guard olaylarını bu kanala logla" },
+      { name: "guard entegrasyon kapat/aç",   desc: "Dış uygulama ve uygulama komutlarını yönetir (Sunucu sahibi)" },
+      { name: "guard yardım",                 desc: "Detaylı Guard ayar komutlarını gösterir" },
       { name: "entegrasyon durum",            desc: "Dış uygulama ve uygulama komutu izinlerini göster" },
       { name: "entegrasyon kapat",            desc: "Sunucuda olmayan dış uygulamaları engelle (Admin)" },
       { name: "entegrasyon aç",               desc: "Dış uygulama izinlerini geri aç (Admin)" },

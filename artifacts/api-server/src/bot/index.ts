@@ -2874,125 +2874,109 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
 const GUARD_MODULES = ["spam", "link", "bot", "emoji", "rol", "kanal"] as const;
 type GuardModule = typeof GUARD_MODULES[number];
 
-async function pfxEntegrasyon(m: Message, args: string[]): Promise<void> {
-  if (!m.guild || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has(PermissionFlagsBits.Administrator)) {
-    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var.");
-    return;
-  }
+const EXTERNAL_APP_PERMISSIONS = [
+  PermissionFlagsBits.UseExternalApps,
+  PermissionFlagsBits.UseApplicationCommands,
+];
 
-  const sub = args[0]?.toLowerCase();
+function isGuildOwner(m: Message): boolean {
+  return Boolean(m.guild && m.author.id === m.guild.ownerId);
+}
+
+async function setExternalAppProtection(m: Message, blocked: boolean): Promise<void> {
+  if (!m.guild) return;
   const everyone = m.guild.roles.everyone;
-  const restrictedPermissions = [
-    PermissionFlagsBits.UseExternalApps,
-    PermissionFlagsBits.UseApplicationCommands,
-  ];
+  const permissions = blocked
+    ? everyone.permissions.remove(EXTERNAL_APP_PERMISSIONS)
+    : everyone.permissions.add(EXTERNAL_APP_PERMISSIONS);
+  await everyone.setPermissions(permissions);
+}
 
-  if (!sub || sub === "durum" || sub === "status") {
-    const externalAppsBlocked = !everyone.permissions.has(PermissionFlagsBits.UseExternalApps);
-    const applicationCommandsBlocked = !everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands);
-    await m.reply(
-      "🔒 **Dış Uygulama Koruması**\n" +
-      `• Sunucuda olmayan uygulamalar: ${externalAppsBlocked ? "🔴 Engelli" : "🟢 Açık"}\n` +
-      `• Uygulama komutları: ${applicationCommandsBlocked ? "🔴 Engelli" : "🟢 Açık"}\n\n` +
-      "Kapatmak için: `v!entegrasyon kapat`\nAçmak için: `v!entegrasyon aç`",
-    );
-    return;
-  }
-
-  if (sub === "kapat" || sub === "engelle" || sub === "on") {
-    await everyone.setPermissions(everyone.permissions.remove(restrictedPermissions));
-    await m.reply(
-      "✅ Dış uygulama koruması açıldı. Sunucuda kurulu olmayan uygulamalar ve uygulama komutları normal üyeler için engellendi.\n" +
-      "Not: Administrator yetkisi olan üyeler Discord tarafından bu kısıtlamayı aşabilir.",
-    );
-    return;
-  }
-
-  if (sub === "aç" || sub === "ac" || sub === "izin" || sub === "off") {
-    await everyone.setPermissions(everyone.permissions.add(restrictedPermissions));
-    await m.reply("🟢 Dış uygulama ve uygulama komutu kullanımı tekrar açıldı.");
-    return;
-  }
-
-  await m.reply(
-    "🔒 **Entegrasyon Koruması**\n" +
-    "`entegrasyon durum` — mevcut durumu gösterir\n" +
-    "`entegrasyon kapat` — dış uygulamaları ve uygulama komutlarını engeller\n" +
-    "`entegrasyon aç` — izinleri geri açar",
-  );
+async function pfxEntegrasyon(m: Message, args: string[]): Promise<void> {
+  await pfxGuard(m, ["entegrasyon", ...args]);
 }
 
 async function pfxGuard(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.member || !m.guildId) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
-    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var."); return;
-  }
 
   const sub = args[0]?.toLowerCase();
 
-  // v!guard → mevcut durumu görsel kart olarak göster
+  // v!guard → mevcut durumu detaylı embed olarak göster
   if (!sub || sub === "durum" || sub === "status") {
     const cfg = await getGuard(m.guildId);
     let wl: string[] = [];
     try { wl = JSON.parse(cfg.linkWhitelist); } catch { /**/ }
+    const everyone = m.guild.roles.everyone;
+    const status = (enabled: boolean) => enabled ? "🟢 Açık" : "🔴 Kapalı";
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle(`🛡️ Guard Ayarları — ${m.guild.name}`)
+      .setDescription(`Ayar değiştirme yetkisi yalnızca sunucu sahibinde: <@${m.guild.ownerId}>`)
+      .addFields(
+        { name: "💬 Spam Koruması", value: `${status(cfg.spamEnabled)}\nEşik: **${cfg.spamThreshold} mesaj / 5 sn**\nAksiyon: **${cfg.spamAction}**`, inline: true },
+        { name: "🔗 Link Koruması", value: `${status(cfg.linkEnabled)}\nAksiyon: **${cfg.linkAction}**\nWhitelist: ${wl.length ? wl.map((d) => `\`${d}\``).join(", ") : "Yok"}`, inline: true },
+        { name: "🤖 Bot Giriş Koruması", value: `${status(cfg.botEnabled)}\nAksiyon: **${cfg.botAction}**`, inline: true },
+        { name: "😀 Emoji Limiti", value: `${status(cfg.emojiEnabled)}\nLimit: **${cfg.emojiMax} emoji**\nAksiyon: **${cfg.emojiAction}**`, inline: true },
+        { name: "🎭 Rol Koruması", value: `${status(cfg.roleEnabled)}\n10 saniyede 5+ değişiklik alarmı`, inline: true },
+        { name: "📢 Kanal Koruması", value: `${status(cfg.channelEnabled)}\n10 saniyede 4+ değişiklik alarmı`, inline: true },
+        { name: "🔒 Dış Uygulamalar", value: `${everyone.permissions.has(PermissionFlagsBits.UseExternalApps) ? "🟢 Açık" : "🔴 Engelli"}\nSunucuda olmayan uygulamalar`, inline: true },
+        { name: "⚡ Uygulama Komutları", value: `${everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands) ? "🟢 Açık" : "🔴 Engelli"}\nSlash/uygulama komutları`, inline: true },
+        { name: "📋 Log Kanalı", value: cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış", inline: true },
+      )
+      .setFooter({ text: "Detaylı kullanım: v!guard yardım" })
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
+    return;
+  }
 
-    const modules: GuardModuleInfo[] = [
-      {
-        name: "spam", displayName: "Spam Koruması", icon: "💬",
-        enabled: cfg.spamEnabled,
-        details: `Eşik: ${cfg.spamThreshold} mesaj/5sn · Aksiyon: ${cfg.spamAction}`,
-      },
-      {
-        name: "link", displayName: "Link Engeli", icon: "🔗",
-        enabled: cfg.linkEnabled,
-        details: `Aksiyon: ${cfg.linkAction}${wl.length ? ` · Whitelist: ${wl.join(", ")}` : ""}`,
-      },
-      {
-        name: "bot", displayName: "Bot Koruması", icon: "🤖",
-        enabled: cfg.botEnabled,
-        details: `Bot girişi engelleme · Aksiyon: ${cfg.botAction}`,
-      },
-      {
-        name: "emoji", displayName: "Emoji Limiti", icon: "😀",
-        enabled: cfg.emojiEnabled,
-        details: `Max: ${cfg.emojiMax} emoji/mesaj · Aksiyon: ${cfg.emojiAction}`,
-      },
-      {
-        name: "rol", displayName: "Rol Koruması", icon: "🎭",
-        enabled: cfg.roleEnabled,
-        details: "Toplu rol değişikliği tespiti (10 sn'de 5+)",
-      },
-      {
-        name: "kanal", displayName: "Kanal Koruması", icon: "📢",
-        enabled: cfg.channelEnabled,
-        details: "Toplu kanal değişikliği tespiti (10 sn'de 4+)",
-      },
-    ];
+  if (!isGuildOwner(m)) {
+    await m.reply("❌ Guard ayarlarını yalnızca sunucu sahibi (👑) değiştirebilir.");
+    return;
+  }
 
-    try {
-      await m.channel.sendTyping().catch(() => null);
-      const buf = await generateGuardCard({
-        guildName: m.guild.name,
-        modules,
-        logChannel: cfg.logChannelId ? `#${cfg.logChannelId}` : null,
+  if (sub === "yardım" || sub === "yardim" || sub === "help") {
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle("🛡️ Guard Komutları")
+        .setDescription("Bu ayarları yalnızca sunucu sahibi değiştirebilir.")
+        .addFields(
+          { name: "Modül aç/kapat", value: "`guard spam aç/kapat eşik 5`\n`guard spam aç/kapat aksiyon warn`\n`guard link aç/kapat aksiyon delete`\n`guard bot aç/kapat aksiyon kick|ban`\n`guard emoji aç/kapat max 5 aksiyon delete`\n`guard rol aç/kapat`\n`guard kanal aç/kapat`" },
+          { name: "Link ve log", value: "`guard link whitelist ekle example.com`\n`guard link whitelist kaldir example.com`\n`guard log #kanal`" },
+          { name: "Entegrasyon engeli", value: "`guard entegrasyon durum`\n`guard entegrasyon kapat`\n`guard entegrasyon aç`" },
+        )
+        .setFooter({ text: "Durumu görmek için: v!guard durum" })],
+    });
+    return;
+  }
+
+  if (sub === "entegrasyon" || sub === "uygulama" || sub === "apps") {
+    const action = args[1]?.toLowerCase();
+    const everyone = m.guild.roles.everyone;
+    if (!action || action === "durum" || action === "status") {
+      await m.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle("🔒 Dış Uygulama Koruması")
+          .addFields(
+            { name: "Sunucuda olmayan uygulamalar", value: everyone.permissions.has(PermissionFlagsBits.UseExternalApps) ? "🟢 Açık" : "🔴 Engelli", inline: true },
+            { name: "Uygulama komutları", value: everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands) ? "🟢 Açık" : "🔴 Engelli", inline: true },
+          )
+          .setFooter({ text: "Yalnızca sunucu sahibi değiştirebilir." })],
       });
-      await m.reply({ files: [new AttachmentBuilder(buf, { name: "guard.png" })] });
-    } catch {
-      // Metin fallback
-      const row = (k: string, enabled: boolean, extra = "") =>
-        `${enabled ? "🟢" : "🔴"} **${k}**${extra ? ` — ${extra}` : ""}`;
-      await m.reply(
-        `🛡️ **Guard Durumu** — ${m.guild.name}\n` +
-        `${row("spam",  cfg.spamEnabled,  `eşik: ${cfg.spamThreshold} msg/5sn · ${cfg.spamAction}`)}\n` +
-        `${row("link",  cfg.linkEnabled,  `${cfg.linkAction}${wl.length ? ` · whitelist: ${wl.join(", ")}` : ""}`)}\n` +
-        `${row("bot",   cfg.botEnabled,   cfg.botAction)}\n` +
-        `${row("emoji", cfg.emojiEnabled, `max ${cfg.emojiMax} · ${cfg.emojiAction}`)}\n` +
-        `${row("rol",   cfg.roleEnabled)}\n` +
-        `${row("kanal", cfg.channelEnabled)}\n` +
-        `📋 Log: ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış"}`
-      );
+      return;
     }
+    if (["kapat", "engelle", "on"].includes(action)) {
+      await setExternalAppProtection(m, true);
+      await m.reply("✅ Guard dış uygulama koruması açıldı. Sunucuda olmayan uygulamalar ve uygulama komutları normal üyeler için engellendi.");
+      return;
+    }
+    if (["aç", "ac", "izin", "off"].includes(action)) {
+      await setExternalAppProtection(m, false);
+      await m.reply("🟢 Guard dış uygulama koruması kapatıldı; uygulama izinleri geri açıldı.");
+      return;
+    }
+    await m.reply("❌ Kullanım: `guard entegrasyon durum|kapat|aç`");
     return;
   }
 
