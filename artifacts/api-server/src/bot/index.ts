@@ -44,7 +44,11 @@ import { addToQueue, pauseResume, skipTrack, stopAndLeave, getQueue, getNowPlayi
 import { generateMusicCard } from "./musicCard";
 import { resumeActiveGiveaways, createGiveaway, getChannelGiveaway, addParticipant, endGiveaway, cancelGiveaway, getActiveGiveaways, setMessageId, startGiveawayTimers } from "./giveaway";
 import { generateGiveawayCard } from "./giveawayCard";
-import { getGuard, setGuard, handleSpam, handleLink, handleEmoji, handleBotJoin, handleRoleUpdate, handleChannelChange } from "./guard";
+import {
+  getGuard, setGuard, ensureGuardSchema, handleSpam, handleLink, handleEmoji,
+  handleBotJoin, handleRoleUpdate, handleChannelChange, handleAuditLogEntry,
+  handleMessageLog, handleBulkMessageLog,
+} from "./guard";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
@@ -2909,7 +2913,12 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
         { name: "📢 Kanal Koruması", value: `${status(cfg.channelEnabled)}\n10 saniyede 4+ değişiklik alarmı`, inline: true },
         { name: "🔒 Dış Uygulamalar", value: `${everyone.permissions.has(PermissionFlagsBits.UseExternalApps) ? "🟢 Açık" : "🔴 Engelli"}\nSunucuda olmayan uygulamalar`, inline: true },
         { name: "⚡ Uygulama Komutları", value: `${everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands) ? "🟢 Açık" : "🔴 Engelli"}\nSlash/uygulama komutları`, inline: true },
-        { name: "📋 Log Kanalı", value: cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "📋 Guard Logu", value: cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "🔨 Ban Logu", value: cfg.banLogChannelId ? `<#${cfg.banLogChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "🔇 Mute Logu", value: cfg.muteLogChannelId ? `<#${cfg.muteLogChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "💬 Mesaj Logu", value: cfg.messageLogChannelId ? `<#${cfg.messageLogChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "🗑️ Silinen Mesaj Logu", value: cfg.deletedMessageLogChannelId ? `<#${cfg.deletedMessageLogChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "🧾 Genel İşlem Logu", value: cfg.generalLogChannelId ? `<#${cfg.generalLogChannelId}>` : "Ayarlanmamış", inline: true },
       )
       .setFooter({ text: "Detaylı kullanım: v!guard yardım" })
       .setTimestamp();
@@ -2930,7 +2939,8 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
         .setDescription("Bu ayarları yalnızca sunucu sahibi değiştirebilir.")
         .addFields(
           { name: "Modül aç/kapat", value: "`guard spam aç/kapat eşik 5`\n`guard spam aç/kapat aksiyon warn`\n`guard link aç/kapat aksiyon delete`\n`guard bot aç/kapat aksiyon kick|ban`\n`guard emoji aç/kapat max 5 aksiyon delete`\n`guard rol aç/kapat`\n`guard kanal aç/kapat`" },
-          { name: "Link ve log", value: "`guard link whitelist ekle example.com`\n`guard link whitelist kaldir example.com`\n`guard log #kanal`" },
+          { name: "Log kanalları", value: "`guard log #kanal` — eski Guard logu + genel log\n`guard log ban #kanal`\n`guard log mute #kanal`\n`guard log mesaj #kanal`\n`guard log silinen #kanal`\n`guard log genel #kanal`\nAyrıca: `guard banlog #kanal`, `guard mutelog #kanal`, `guard mesajlog #kanal`, `guard silinenlog #kanal`, `guard genellog #kanal`" },
+          { name: "Link", value: "`guard link whitelist ekle example.com`\n`guard link whitelist kaldir example.com`" },
           { name: "Entegrasyon engeli", value: "`guard entegrasyon durum`\n`guard entegrasyon kapat`\n`guard entegrasyon aç`" },
         )
         .setFooter({ text: "Durumu görmek için: v!guard durum" })],
@@ -2968,12 +2978,59 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  // v!guard log #kanal
-  if (sub === "log") {
-    const ch = m.mentions.channels.first();
-    if (!ch) { await m.reply("❌ Kullanım: `guard log #kanal`"); return; }
-    await setGuard(m.guildId, { logChannelId: ch.id });
-    await m.reply(`✅ Guard logları <#${ch.id}> kanalına gönderilecek.`); return;
+  // v!guard log <tür> #kanal
+  // Doğrudan kısa kullanımlar da desteklenir: banlog, mutelog, mesajlog,
+  // silinenlog ve genellog.
+  const logTargets: Record<string, { key: string; label: string }> = {
+    ban: { key: "banLogChannelId", label: "ban" },
+    banlog: { key: "banLogChannelId", label: "ban" },
+    mute: { key: "muteLogChannelId", label: "mute" },
+    mutelog: { key: "muteLogChannelId", label: "mute" },
+    mesaj: { key: "messageLogChannelId", label: "mesaj" },
+    mesajlog: { key: "messageLogChannelId", label: "mesaj" },
+    message: { key: "messageLogChannelId", label: "mesaj" },
+    silinen: { key: "deletedMessageLogChannelId", label: "silinen mesaj" },
+    silinenlog: { key: "deletedMessageLogChannelId", label: "silinen mesaj" },
+    silinenmesaj: { key: "deletedMessageLogChannelId", label: "silinen mesaj" },
+    genel: { key: "generalLogChannelId", label: "genel" },
+    genellog: { key: "generalLogChannelId", label: "genel" },
+    general: { key: "generalLogChannelId", label: "genel" },
+  };
+  const normalizedSub = (sub ?? "").replace(/[-_]/g, "");
+  const directLogTarget = logTargets[normalizedSub];
+  if (sub === "log" || directLogTarget) {
+    const requestedType = sub === "log"
+      ? (args[1]?.toLowerCase().replace(/[-_]/g, "") ?? "")
+      : normalizedSub;
+    const target = sub === "log" && !logTargets[requestedType]
+      ? null
+      : (sub === "log" ? logTargets[requestedType] : directLogTarget);
+    const channel = m.mentions.channels.first();
+    const closeArg = sub === "log" ? args[2]?.toLowerCase() : args[1]?.toLowerCase();
+    const isClose = ["kapat", "kaldir", "kaldır", "sil", "remove", "off"].includes(closeArg ?? "");
+
+    // Eski kullanım korunur ve aynı kanalı genel işlem loguna da bağlar.
+    if (sub === "log" && !target && channel) {
+      await setGuard(m.guildId, { logChannelId: channel.id, generalLogChannelId: channel.id });
+      await m.reply(`✅ Guard ve genel işlem logları <#${channel.id}> kanalına gönderilecek.`);
+      return;
+    }
+    if (!target) {
+      await m.reply("❌ Kullanım: `guard log ban|mute|mesaj|silinen|genel #kanal`");
+      return;
+    }
+    if (isClose) {
+      await setGuard(m.guildId, { [target.key]: null } as Parameters<typeof setGuard>[1]);
+      await m.reply(`✅ **${target.label} logu** kapatıldı.`);
+      return;
+    }
+    if (!channel || !channel.isTextBased()) {
+      await m.reply(`❌ Kullanım: \`guard log ${target.label} #kanal\` veya kapatmak için \`guard log ${target.label} kapat\``);
+      return;
+    }
+    await setGuard(m.guildId, { [target.key]: channel.id } as Parameters<typeof setGuard>[1]);
+    await m.reply(`✅ **${target.label} logları** <#${channel.id}> kanalına gönderilecek.`);
+    return;
   }
 
   // v!guard link whitelist ekle/kaldir <domain>
@@ -3845,6 +3902,7 @@ export async function startBot(): Promise<void> {
   });
 
   client.once(Events.ClientReady, async (c) => {
+    await ensureGuardSchema().catch((err) => logger.error({ err }, "Guard veritabanı şeması hazırlanamadı"));
     await ensureAnonymousSchema().catch((err) => logger.error({ err }, "Anonim veritabanı şeması hazırlanamadı"));
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
 
@@ -4241,6 +4299,9 @@ export async function startBot(): Promise<void> {
 
   // ── Guard: Rol & Kanal saldırısı tespiti ─────────────────────────────────
   client.on(Events.GuildAuditLogEntryCreate, async (entry, guild) => {
+    await handleAuditLogEntry(guild, entry).catch((err) => {
+      logger.debug({ err, guildId: guild.id }, "Genel audit log gönderilemedi");
+    });
     if (
       entry.action === AuditLogEvent.MemberRoleUpdate ||
       entry.action === AuditLogEvent.RoleCreate ||
@@ -4258,9 +4319,37 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // ── Mesaj logları ────────────────────────────────────────────────────────
+  client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
+    if (!newMessage.guild) return;
+    await handleMessageLog(newMessage.guild, newMessage, "edited").catch((err) => {
+      logger.debug({ err, guildId: newMessage.guildId }, "Mesaj düzenleme logu gönderilemedi");
+    });
+  });
+
+  client.on(Events.MessageDelete, async (message) => {
+    if (!message.guild) return;
+    await handleMessageLog(message.guild, message, "deleted").catch((err) => {
+      logger.debug({ err, guildId: message.guildId }, "Mesaj silme logu gönderilemedi");
+    });
+  });
+
+  client.on(Events.MessageBulkDelete, async (messages, channel) => {
+    const guild = "guild" in channel ? channel.guild : null;
+    if (!guild) return;
+    await handleBulkMessageLog(guild, channel.id, messages.size).catch((err) => {
+      logger.debug({ err, guildId: guild.id }, "Toplu mesaj silme logu gönderilemedi");
+    });
+  });
+
   // ── Mesaj XP + Guard + Prefix komutlar ───────────────────────────────────
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
+    if (message.guild) {
+      void handleMessageLog(message.guild, message, "message").catch((err) => {
+        logger.debug({ err, guildId: message.guildId }, "Mesaj logu gönderilemedi");
+      });
+    }
 
     // DM: anonim profil, anonim hesaba mesaj ve kara liste işlemleri.
     if (!message.guildId) {

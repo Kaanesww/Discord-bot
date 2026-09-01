@@ -16,6 +16,11 @@ export const guardSettingsTable = pgTable("guard_settings", {
   roleEnabled:     boolean("role_enabled").notNull().default(false),
   channelEnabled:  boolean("channel_enabled").notNull().default(false),
   logChannelId:    text("log_channel_id"),
+  banLogChannelId: text("ban_log_channel_id"),
+  muteLogChannelId: text("mute_log_channel_id"),
+  messageLogChannelId: text("message_log_channel_id"),
+  deletedMessageLogChannelId: text("deleted_message_log_channel_id"),
+  generalLogChannelId: text("general_log_channel_id"),
 });
 
 export type GuardSettings = typeof guardSettingsTable.$inferSelect;
