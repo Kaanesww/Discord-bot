@@ -2874,6 +2874,55 @@ async function pfxYardim(m: Message, args: string[]): Promise<void> {
 const GUARD_MODULES = ["spam", "link", "bot", "emoji", "rol", "kanal"] as const;
 type GuardModule = typeof GUARD_MODULES[number];
 
+async function pfxEntegrasyon(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.member) return;
+  if (!isOwner(m.author.id) && !m.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+  const everyone = m.guild.roles.everyone;
+  const restrictedPermissions = [
+    PermissionFlagsBits.UseExternalApps,
+    PermissionFlagsBits.UseApplicationCommands,
+  ];
+
+  if (!sub || sub === "durum" || sub === "status") {
+    const externalAppsBlocked = !everyone.permissions.has(PermissionFlagsBits.UseExternalApps);
+    const applicationCommandsBlocked = !everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands);
+    await m.reply(
+      "🔒 **Dış Uygulama Koruması**\n" +
+      `• Sunucuda olmayan uygulamalar: ${externalAppsBlocked ? "🔴 Engelli" : "🟢 Açık"}\n` +
+      `• Uygulama komutları: ${applicationCommandsBlocked ? "🔴 Engelli" : "🟢 Açık"}\n\n` +
+      "Kapatmak için: `v!entegrasyon kapat`\nAçmak için: `v!entegrasyon aç`",
+    );
+    return;
+  }
+
+  if (sub === "kapat" || sub === "engelle" || sub === "on") {
+    await everyone.setPermissions(everyone.permissions.remove(restrictedPermissions));
+    await m.reply(
+      "✅ Dış uygulama koruması açıldı. Sunucuda kurulu olmayan uygulamalar ve uygulama komutları normal üyeler için engellendi.\n" +
+      "Not: Administrator yetkisi olan üyeler Discord tarafından bu kısıtlamayı aşabilir.",
+    );
+    return;
+  }
+
+  if (sub === "aç" || sub === "ac" || sub === "izin" || sub === "off") {
+    await everyone.setPermissions(everyone.permissions.add(restrictedPermissions));
+    await m.reply("🟢 Dış uygulama ve uygulama komutu kullanımı tekrar açıldı.");
+    return;
+  }
+
+  await m.reply(
+    "🔒 **Entegrasyon Koruması**\n" +
+    "`entegrasyon durum` — mevcut durumu gösterir\n" +
+    "`entegrasyon kapat` — dış uygulamaları ve uygulama komutlarını engeller\n" +
+    "`entegrasyon aç` — izinleri geri açar",
+  );
+}
+
 async function pfxGuard(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.member || !m.guildId) return;
   if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
@@ -3619,6 +3668,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   "çekiliş": pfxCekilis, cekilis: pfxCekilis, giveaway: pfxCekilis, cekilish: pfxCekilis,
   // Guard
   guard: pfxGuard, koruma: pfxGuard,
+  entegrasyon: pfxEntegrasyon, entegrasyonlar: pfxEntegrasyon, uygulamaengel: pfxEntegrasyon,
   // Moderasyon ayarları
   modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
   // Stat
