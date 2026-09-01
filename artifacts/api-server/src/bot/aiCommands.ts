@@ -493,7 +493,9 @@ export async function executeToolCall(
         const enabled = s?.enabled ?? false;
         const log     = s?.logChannelId ? `<#${s.logChannelId}>` : "Ayarlanmamış";
         const cmds    = (Object.entries(MOD_CMD_LABELS) as [ModCommand, string][]).map(([cmd, label]) => {
-          const roles: string[] = s ? JSON.parse((s as Record<string, string>)[`${cmd}Roles`] ?? "[]") : [];
+          const roles: string[] = s
+            ? JSON.parse(String((s as unknown as Record<string, unknown>)[`${cmd}Roles`] ?? "[]"))
+            : [];
           const roleStr = roles.length ? roles.map((r) => `<@&${r}>`).join(", ") : "*(sadece Discord izni)*";
           return `**${label}** → ${roleStr}`;
         });

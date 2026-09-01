@@ -26,6 +26,7 @@ import type { VoiceBasedChannel, TextBasedChannel } from "discord.js";
 import { AttachmentBuilder } from "discord.js";
 import { generateMusicCard } from "./musicCard";
 import { logger } from "../lib/logger";
+import { sendTextBasedChannel } from "./types";
 
 // ── Track tipi ────────────────────────────────────────────────────────────────
 
@@ -295,7 +296,7 @@ async function playNext(guildId: string): Promise<void> {
   if (queue.tracks.length === 0) {
     getVoiceConnection(guildId)?.destroy();
     queues.delete(guildId);
-    queue.textChannel.send("📭 Kuyruk bitti, ses kanalından çıkıldı.").catch(() => null);
+    sendTextBasedChannel(queue.textChannel, "📭 Kuyruk bitti, ses kanalından çıkıldı.").catch(() => null);
     return;
   }
 
@@ -310,16 +311,16 @@ async function playNext(guildId: string): Promise<void> {
     // Görsel kart
     try {
       const buf = await generateMusicCard(track, "playing");
-      await queue.textChannel.send({
+      await sendTextBasedChannel(queue.textChannel, {
         content: `🎵 **${track.title}**`,
         files: [new AttachmentBuilder(buf, { name: "nowplaying.png" })],
       });
     } catch {
-      queue.textChannel.send(`▶️ **Çalınıyor:** ${track.title} — ${track.duration}`).catch(() => null);
+      sendTextBasedChannel(queue.textChannel, `▶️ **Çalınıyor:** ${track.title} — ${track.duration}`).catch(() => null);
     }
   } catch (err: any) {
     logger.error({ err, title: track.title }, "Şarkı oynatılamadı");
-    queue.textChannel.send(`❌ **${track.title}** oynatılamadı — ${err?.message ?? "bilinmeyen hata"}`).catch(() => null);
+    sendTextBasedChannel(queue.textChannel, `❌ **${track.title}** oynatılamadı — ${err?.message ?? "bilinmeyen hata"}`).catch(() => null);
     queue.tracks.shift();
     if (queue.tracks.length > 0) {
       setTimeout(() => playNext(guildId).catch(() => null), 1000);
@@ -400,7 +401,7 @@ export async function addToQueue(
             } else {
               connection!.destroy();
               queues.delete(guildId);
-              textChannel.send("⚠️ Ses bağlantısı kesildi ve yeniden kurulamadı.").catch(() => null);
+              sendTextBasedChannel(textChannel, "⚠️ Ses bağlantısı kesildi ve yeniden kurulamadı.").catch(() => null);
             }
           } catch {
             connection!.destroy();

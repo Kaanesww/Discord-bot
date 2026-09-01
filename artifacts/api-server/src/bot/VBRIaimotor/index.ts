@@ -14,6 +14,7 @@ import { detectIntent } from "./patterns";
 import { reply } from "./personality";
 import { isOwner } from "../ownerUtils";
 import { addToHistory } from "./memory";
+import { sendMessageChannel, sendMessageTyping } from "../types";
 
 // ── Sohbet handler (etiketlenme ile tetiklenir) ───────────────────────────────
 
@@ -40,7 +41,7 @@ export async function handleCodeChannel(message: Message): Promise<void> {
   if (pending) {
     // Onayla
     if (intent === "CODE_APPROVE") {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       try {
         await saveGeneratedCommand(pending);
         const r = reply.codeApproved(pending.commandName);
@@ -66,7 +67,7 @@ export async function handleCodeChannel(message: Message): Promise<void> {
     if (intent === "CODE_REVISE" || text.toLowerCase().startsWith("düzenle")) {
       const revisedDesc = text.replace(/^(düzenle|değiştir|revize|güncelle)[:\s]+/i, "").trim();
       const newDesc = revisedDesc || pending.description;
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const updated = generateCommand(newDesc);
       setPendingCode(channelId, updated);
 
@@ -94,7 +95,7 @@ export async function handleCodeChannel(message: Message): Promise<void> {
   }
 
   logger.info({ author: message.author.username, text: text.slice(0, 100) }, "VBRIaimotor: kod isteği");
-  await message.channel.sendTyping().catch(() => null);
+  await sendMessageTyping(message).catch(() => null);
 
   const buildMsg = reply.codeBuilding();
   const buildReply = await message.reply(buildMsg).catch(() => null);
@@ -112,7 +113,7 @@ export async function handleCodeChannel(message: Message): Promise<void> {
       `🔄 **düzenle: [açıklama]** — Revize et`;
 
     await buildReply?.delete().catch(() => null);
-    await message.channel.send(preview).catch(() => null);
+    await sendMessageChannel(message, preview).catch(() => null);
 
   } catch (err) {
     logger.error({ err }, "VBRIaimotor: kod üretme hatası");

@@ -13,6 +13,7 @@ import { pool } from "@workspace/db";
 import { and, eq, lt, or, sql } from "drizzle-orm";
 import {
   ChannelType,
+  type Client,
   type Guild,
   type Message,
   type TextChannel,
@@ -754,7 +755,7 @@ export async function resolveAnonymousConversation(
 }
 
 export async function relayAnonymousChannelMessage(message: Message): Promise<boolean> {
-  if (!message.guildId || message.author.bot) return false;
+  if (!message.guildId || !message.guild || message.author.bot) return false;
   const sessions = await db.select().from(anonymousSessionsTable).where(and(
     eq(anonymousSessionsTable.active, true),
     or(eq(anonymousSessionsTable.channelAId, message.channelId), eq(anonymousSessionsTable.channelBId, message.channelId)),
@@ -875,7 +876,7 @@ export async function sendAnonymousMessage(
   senderUserId: string,
   targetAccountId: string,
   content: string,
-  client: Message["client"],
+  client: Client,
 ): Promise<{ ok: boolean; message: string }> {
   const target = await getAnonymousAccountById(targetAccountId);
   if (!target) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
@@ -905,7 +906,7 @@ export async function sendAnonymousMessage(
 export async function startAnonymousConversation(
   senderUserId: string,
   targetAccountId: string,
-  client: Message["client"],
+  client: Client,
 ): Promise<{ ok: boolean; message: string }> {
   const target = await getAnonymousAccountById(targetAccountId);
   if (!target) return { ok: false, message: "Bu anonim hesap ID'si bulunamadı." };
@@ -1007,7 +1008,7 @@ export async function closeAnonymousChannelConversation(
 
 export async function relayAnonymousConversationMessage(
   message: Message,
-  client: Message["client"],
+  client: Client,
 ): Promise<boolean> {
   if (message.author.bot || message.guildId) return false;
   const rows = await db.select().from(anonymousSessionsTable)
@@ -1060,7 +1061,7 @@ export async function relayAnonymousConversationMessage(
   return true;
 }
 
-export async function sendAnonymousProfileDm(userId: string, client: Message["client"]): Promise<void> {
+export async function sendAnonymousProfileDm(userId: string, client: Client): Promise<void> {
   const user = await client.users.fetch(userId);
   const profiles = await getAnonymousProfile(userId);
   if (!profiles.length) {
@@ -1091,7 +1092,7 @@ export async function sendAnonymousProfileDm(userId: string, client: Message["cl
 export async function handleAnonymousButton(
   customId: string,
   userId: string,
-  client: Message["client"],
+  client: Client,
 ): Promise<{ handled: boolean; content?: string; accountId?: string }> {
   if (customId.startsWith("anon_create_account:")) {
     const [, guildId] = customId.split(":");
@@ -1221,7 +1222,7 @@ async function createAccount(message: Message) {
  * normal kullanıcı adı kanalda görünür kalmaz.
  */
 export async function handleAnonymousMessage(message: Message): Promise<boolean> {
-  if (!message.guildId || message.author.bot) return false;
+  if (!message.guildId || !message.guild || message.author.bot) return false;
   const settings = await getAnonymousChat(message.guildId);
   if (!settings?.enabled) return false;
   if (message.channel.type !== ChannelType.GuildText) return false;
@@ -1236,7 +1237,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
   )).limit(1);
   const privateAccount = privateRows[0];
   if (privateAccount) {
-    const general = await message.guild!.channels.fetch(settings.channelId).catch(() => null);
+    const general = await message.guild.channels.fetch(settings.channelId).catch(() => null);
     if (!general || general.type !== ChannelType.GuildText) return true;
     const content = message.content.trim().slice(0, 1900);
     if (!content) return true;
@@ -1246,7 +1247,6 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
       username: anonymousPublicName(privateAccount),
       avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
       allowedMentions: { parse: [] },
-      wait: true,
     });
     generalWebhook.destroy();
     await db.update(anonymousAccountsTable)
@@ -1257,7 +1257,7 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
     for (const recipient of accounts) {
       // Gönderen mesajı zaten kendi özel kanalında görüyor; tekrar kopyalama.
       if (recipient.id === privateAccount.id || !recipient.privateChannelId) continue;
-      const target = await message.guild!.channels.fetch(recipient.privateChannelId).catch(() => null);
+      const target = await message.guild.channels.fetch(recipient.privateChannelId).catch(() => null);
       if (!target || target.type !== ChannelType.GuildText) continue;
       const copyWebhook = await getOrCreatePrivateWebhook(message.guild, recipient);
       if (!copyWebhook) continue;
@@ -1266,7 +1266,6 @@ export async function handleAnonymousMessage(message: Message): Promise<boolean>
         username: anonymousPublicName(privateAccount),
         avatarURL: privateAccount.avatarUrl ?? "https://cdn.discordapp.com/embed/avatars/0.png",
         allowedMentions: { parse: [] },
-        wait: true,
       }).catch(() => null);
       copyWebhook.destroy();
       if (copy) recipients[recipient.id] = copy.id;

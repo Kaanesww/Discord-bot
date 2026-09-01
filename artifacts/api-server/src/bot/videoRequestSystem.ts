@@ -26,7 +26,9 @@ import { applyImageWatermark, applyVideoWatermark } from "./watermark";
 // ── Sabitler ──────────────────────────────────────────────────────────────────
 
 const MAX_FILE_BYTES  = 95 * 1024 * 1024; // 95 MB tek dosya
+const MAX_TOTAL_BYTES  = 95 * 1024 * 1024; // tek istekte toplam üst sınır
 const MAX_FILES_PER_UPLOAD = 3; // Discord yüklemelerinde tek isteği küçük tut
+const MAX_WATERMARK_URL_LENGTH = 200;
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".avi", ".mkv"]);
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
@@ -77,9 +79,20 @@ export async function getVideoSettings(guildId: string) {
     .where(eq(videoRequestSettingsTable.guildId, guildId))
     .limit(1);
   const row = rows[0];
+  let approvalRoles: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(row?.approvalRoles ?? "[]");
+    if (Array.isArray(parsed)) {
+      approvalRoles = parsed.filter(
+        (value): value is string => typeof value === "string" && /^\d{15,22}$/.test(value),
+      );
+    }
+  } catch {
+    // Bozuk ayarlar, medya komutlarının tamamını durdurmamalı.
+  }
   return {
     moderationChannelId: row?.moderationChannelId ?? null,
-    approvalRoles: JSON.parse(row?.approvalRoles ?? "[]") as string[],
+    approvalRoles,
     inviteUrl: row?.inviteUrl ?? null,
     showSharerName: row?.showSharerName ?? false,
   };
@@ -128,6 +141,22 @@ export async function getVideoModerationChannel(guildId: string): Promise<string
 
 // ── Davet linki ayarla / getir ────────────────────────────────────────────────
 export async function setInviteUrl(guildId: string, inviteUrl: string | null): Promise<void> {
+  if (inviteUrl !== null) {
+    const value = inviteUrl.trim();
+    if (value.length === 0 || value.length > MAX_WATERMARK_URL_LENGTH) {
+      throw new Error(`Watermark URL'si ${MAX_WATERMARK_URL_LENGTH} karakterden kısa olmalı.`);
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error("Geçerli bir URL girilmelidir.");
+    }
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error("Yalnızca HTTP/HTTPS URL'leri kullanılabilir.");
+    }
+    inviteUrl = parsed.toString();
+  }
   await db
     .insert(videoRequestSettingsTable)
     .values({ guildId, inviteUrl })
@@ -309,10 +338,17 @@ export async function sendMediaRequest(message: Message): Promise<void> {
   try {
     for (const att of attachments) {
       const kind = checkFileType(att.name, att.contentType)!;
-      const res  = await fetch(att.url);
+      const res  = await fetch(att.url, { signal: AbortSignal.timeout(30_000) });
       if (!res.ok) throw new Error(`${att.name} indirilemedi (HTTP ${res.status})`);
       const buffer = Buffer.from(await res.arrayBuffer());
-      stored.push({ name: att.name, buffer, size: att.size, isVideo: kind === "video" });
+      if (buffer.byteLength > MAX_FILE_BYTES) {
+        throw new Error(`${att.name} indirilen dosya boyutu 95 MB sınırını aşıyor.`);
+      }
+      const totalBytes = stored.reduce((total, file) => total + file.buffer.byteLength, 0) + buffer.byteLength;
+      if (totalBytes > MAX_TOTAL_BYTES) {
+        throw new Error("Tek istekteki toplam dosya boyutu 95 MB sınırını aşıyor.");
+      }
+      stored.push({ name: att.name, buffer, size: buffer.byteLength, isVideo: kind === "video" });
     }
   } catch (err) {
     logger.error({ err }, "Dosya indirme hatası");
@@ -483,24 +519,27 @@ export async function handleVideoApprovalButton(interaction: ButtonInteraction):
     if (descriptionParts.length > 0) contentEmbed.setDescription(descriptionParts.join("\n\n"));
 
     // ── Watermark uygula ─────────────────────────────────────────────────────
-    // Tüm dosyalar aynı anda (paralel) işlenir — hiçbiri atlanmaz
+    // Büyük medya dosyalarını aynı anda dönüştürmek RAM/CPU'yu tüketebilir.
+    // Sıralı işleme, botun tamamının kilitlenmesini engeller.
     const watermarkUrl = inviteUrl;
 
-    const processedFiles = await Promise.all(
-      req.files.map(async (f) => {
-        if (!watermarkUrl) return { buffer: f.buffer, name: f.name };
-        try {
-          if (f.isVideo) {
-            return await applyVideoWatermark(f.buffer, f.name, watermarkUrl);
-          } else {
-            return await applyImageWatermark(f.buffer, f.name, watermarkUrl);
-          }
-        } catch (err) {
-          logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal gönderiliyor");
-          return { buffer: f.buffer, name: f.name };
-        }
-      }),
-    );
+    const processedFiles: Array<{ buffer: Buffer; name: string }> = [];
+    for (const f of req.files) {
+      if (!watermarkUrl) {
+        processedFiles.push({ buffer: f.buffer, name: f.name });
+        continue;
+      }
+      try {
+        processedFiles.push(
+          f.isVideo
+            ? await applyVideoWatermark(f.buffer, f.name, watermarkUrl)
+            : await applyImageWatermark(f.buffer, f.name, watermarkUrl),
+        );
+      } catch (err) {
+        logger.warn({ err, name: f.name }, "Watermark eklenemedi, orijinal gönderiliyor");
+        processedFiles.push({ buffer: f.buffer, name: f.name });
+      }
+    }
 
     // Çok sayıda/büyük dosyayı tek REST isteğine koymak Discord tarafında
     // 60 saniyelik istek zaman aşımına neden olabiliyor. Küçük partiler hâlinde

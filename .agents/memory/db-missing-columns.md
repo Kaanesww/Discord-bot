@@ -1,11 +1,11 @@
 ---
-name: DB eksik kolon düzeltme
-description: drizzle-kit push TTY gerektirdiğinden yeni şema kolonları otomatik oluşturulmaz; executeSql ile manuel eklenmelidir
+name: DB eksik şema düzeltme
+description: drizzle-kit push TTY gerektirdiğinden yeni şema tabloları ve kolonları otomatik oluşturulmaz; executeSql ile manuel eklenmelidir
 ---
 
-# DB Kolon Eksikliği Sorunu
+# DB Şema Eksikliği Sorunu
 
-`drizzle-kit push` komutu TTY gerektirir (interactive prompt). Replit shell'inde çalıştırıldığında "Interactive prompts require a TTY terminal" hatası verir.
+`drizzle-kit push` komutu TTY gerektirir (interactive prompt). Replit shell'inde çalıştırıldığında "Interactive prompts require a TTY terminal" hatası verir. Bu yüzden eksik bir tablo da uygulama açılışında relation hatası üretebilir.
 
 **Why:** Drizzle, mevcut tablolarla şema arasındaki farkı çözmek için kullanıcıdan onay ister. CI/non-interactive ortamda bu çalışmaz.
 
@@ -19,4 +19,4 @@ await executeSql({ sqlQuery: `ALTER TABLE guild_settings ADD COLUMN IF NOT EXIST
 - `guild_settings.level_enabled` — ilk başta tabloda yoktu, 2026-08-06 eklendi
 - `video_request_settings.invite_url` — 2026-08-06 eklendi
 
-**Yeni tablo oluştururken:** `CREATE TABLE IF NOT EXISTS` kullan, `executeSql` üzerinden çalıştır.
+**Yeni tablo oluştururken:** `CREATE TABLE IF NOT EXISTS` kullan, `executeSql` üzerinden çalıştır. Kolon ve tablo tanımını ilgili Drizzle şemasıyla birebir eşleştir.

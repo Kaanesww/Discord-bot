@@ -1,7 +1,7 @@
 /**
  * Watermark Modülü
  * ─────────────────────────────────────────────────────────────────────────────
- * Onaylanan medya dosyalarının rastgele konumuna Discord logosu + metin ekler.
+ * Onaylanan medya dosyalarının sol üst köşesine Discord logosu + metin ekler.
  * • Görseller : @napi-rs/canvas  (JPEG→JPEG, PNG/GIF/WEBP→PNG)
  * • Videolar  : ffmpeg libx264 re-encode  (her format → mp4, garantili çalışır)
  */
@@ -65,23 +65,18 @@ function stripHttps(url: string): string {
   return url.replace(/^https?:\/\//i, "");
 }
 
-// ── Rastgele konum hesapla ────────────────────────────────────────────────────
+// ── Watermark konumu ──────────────────────────────────────────────────────────
 function randomPos(
   cw: number, ch: number,
   wmW: number, wmH: number,
   m: number,
 ): { x: number; y: number } {
-  const opts = [
-    { x: m,            y: m },
-    { x: cw - wmW - m, y: m },
-    { x: m,            y: ch - wmH - m },
-    { x: cw - wmW - m, y: ch - wmH - m },
-    { x: Math.round((cw - wmW) / 2), y: m },
-    { x: Math.round((cw - wmW) / 2), y: ch - wmH - m },
-    { x: m,            y: Math.round((ch - wmH) / 2) },
-    { x: cw - wmW - m, y: Math.round((ch - wmH) / 2) },
-  ];
-  return opts[Math.floor(Math.random() * opts.length)]!;
+  // Sunucu sahibinin belirlediği URL her medyada tutarlı olarak sol üstte
+  // görünür. Sınırlar negatif olursa da görselin içine sabitlenir.
+  return {
+    x: Math.max(0, Math.min(m, cw - wmW)),
+    y: Math.max(0, Math.min(m, ch - wmH)),
+  };
 }
 
 // ── Görsel watermark ──────────────────────────────────────────────────────────
@@ -93,25 +88,32 @@ export async function applyImageWatermark(
   rawText: string,
 ): Promise<{ buffer: Buffer; name: string }> {
   const text = stripHttps(rawText);
+  const displayText = text.length > 80 ? `${text.slice(0, 77)}...` : text;
   try {
     const img    = await loadImage(buffer);
     const canvas = createCanvas(img.width, img.height);
     const ctx    = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
 
-    // Font: görselin genişliğine göre, min 18 max 32 px
-    const fontSize = Math.max(18, Math.min(32, Math.round(img.width * 0.038)));
-    const iconSize = Math.round(fontSize * 1.55);
-    const iconR    = iconSize / 2;
-    const gap      = Math.round(fontSize * 0.4);
+    // Font: görselin genişliğine göre, küçük görsellerde de taşmayacak boyut.
+    let fontSize = Math.max(12, Math.min(32, Math.round(img.width * 0.038)));
     const margin   = 14;
 
     ctx.font = `bold ${fontSize}px sans-serif`;
-    const textW  = Math.ceil(ctx.measureText(text).width);
-    const totalW = iconSize + gap + textW;
-    const totalH = Math.max(iconSize, fontSize + 4);
+    let textW = Math.ceil(ctx.measureText(displayText).width);
+    let totalW = Math.round(fontSize * 1.55) + Math.round(fontSize * 0.4) + textW;
+    while (fontSize > 10 && totalW > img.width - margin * 2) {
+      fontSize -= 1;
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      textW = Math.ceil(ctx.measureText(displayText).width);
+      totalW = Math.round(fontSize * 1.55) + Math.round(fontSize * 0.4) + textW;
+    }
+    const iconSize = Math.round(fontSize * 1.55);
+    const iconR    = iconSize / 2;
+    const gap      = Math.round(fontSize * 0.4);
+    const totalH   = Math.max(iconSize, fontSize + 4);
 
-    // Rastgele konum
+    // Sol üst köşe, kontrollü kenar boşluğu
     const { x: sx, y: sy } = randomPos(img.width, img.height, totalW, totalH, margin);
     const iconCX = sx + iconR;
     const iconCY = sy + totalH / 2;
@@ -138,7 +140,7 @@ export async function applyImageWatermark(
     ctx.shadowOffsetY = 1;
     ctx.font      = `bold ${fontSize}px sans-serif`;
     ctx.fillStyle = "white";
-    ctx.fillText(text, textX, textY);
+    ctx.fillText(displayText, textX, textY);
 
     // Çıkış formatı: JPEG girişi için JPEG (küçük), diğerleri PNG
     const ext  = nodePath.extname(filename).toLowerCase();
@@ -221,8 +223,9 @@ export async function applyVideoWatermark(
   rawText: string,
 ): Promise<{ buffer: Buffer; name: string }> {
   const text = stripHttps(rawText);
+  const displayText = text.length > 80 ? `${text.slice(0, 77)}...` : text;
 
-  const wmBuffer = await buildWatermarkPng(text, 24);
+  const wmBuffer = await buildWatermarkPng(displayText, 24);
 
   const id         = randomUUID();
   const inExt      = nodePath.extname(filename).toLowerCase() || ".mp4";
@@ -233,8 +236,7 @@ export async function applyVideoWatermark(
 
   await Promise.all([writeFile(inputPath, buffer), writeFile(wmPath, wmBuffer)]);
 
-  const overlayPos =
-    VIDEO_OVERLAY_POSITIONS[Math.floor(Math.random() * VIDEO_OVERLAY_POSITIONS.length)]!;
+  const overlayPos = VIDEO_OVERLAY_POSITIONS[0]!;
 
   try {
     // libx264 re-encode: her giriş formatıyla çalışır
@@ -253,7 +255,7 @@ export async function applyVideoWatermark(
       "-c:a", "aac",
       "-movflags", "+faststart",
       outputPath,
-    ]);
+    ], { timeout: 120_000, killSignal: "SIGKILL" });
 
     const result  = await readFile(outputPath);
     const outName = `${base}.mp4`;

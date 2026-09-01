@@ -18,6 +18,7 @@ import {
 } from "./patterns";
 import { isOwner } from "../ownerUtils";
 import { COMMANDS } from "../vbriAI/knowledge";
+import { sendMessageChannel, sendMessageTyping } from "../types";
 
 // ── Cooldown ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ async function send(msg: Message, text: string): Promise<void> {
   for (const p of parts) {
     if (!p) continue;
     if (first) { await msg.reply(p).catch(() => null); first = false; }
-    else await msg.channel.send(p).catch(() => null);
+    else await sendMessageChannel(msg, p).catch(() => null);
   }
 }
 
@@ -182,7 +183,7 @@ export async function processMessage(
   if (intent === "COMMAND_RUN") {
     const trigger = extractCommandTrigger(rawText);
     if (trigger) {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const intro = reply.cmdIntro();
       await send(message, intro);
       const result = await executeToolCall(trigger.tool, trigger.params, message).catch(
@@ -362,7 +363,7 @@ export async function handleVBRIEngine(message: Message): Promise<void> {
     return;
   }
   processingSet.add(channelId);
-  await message.channel.sendTyping().catch(() => null);
+  await sendMessageTyping(message).catch(() => null);
 
   try {
     logger.info({ user: message.author.username, text: rawText.slice(0, 80) }, "VBRIaimotor mesaj");

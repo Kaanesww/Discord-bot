@@ -31,6 +31,7 @@ import {
   getRelevantMemories, prependMemories, learnFromWeb,
 } from "./learn";
 import { fetchWebPage, extractUrl, containsUrl, formatFetchResult } from "./webFetch";
+import { sendMessageChannel, sendMessageTyping } from "../types";
 
 // ── Cooldown ────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ async function send(msg: Message, text: string): Promise<void> {
   let first = true;
   for (const p of parts) {
     if (first) { await msg.reply(p).catch(() => null); first = false; }
-    else await msg.channel.send(p).catch(() => null);
+    else await sendMessageChannel(msg, p).catch(() => null);
   }
 }
 
@@ -136,7 +137,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     const ld = detectLearnIntent(rawText);
 
     if (ld.intent === "LEARN") {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const r = await handleLearn(message, ld.content);
       await send(message, r);
       addTurn(channelId, "bot", r);
@@ -144,7 +145,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     }
 
     if (ld.intent === "RECALL_ALL") {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const r = await handleRecallAll(message);
       await send(message, r);
       addTurn(channelId, "bot", r);
@@ -152,7 +153,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     }
 
     if (ld.intent === "FORGET") {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const r = await handleForget(message);
       await send(message, r);
       addTurn(channelId, "bot", r);
@@ -162,7 +163,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     if (ld.intent === "WEB_LEARN") {
       const url = extractUrl(rawText);
       if (url) {
-        await message.channel.sendTyping().catch(() => null);
+        await sendMessageTyping(message).catch(() => null);
         await send(message, `🌐 Sayfayı getiriyorum: \`${url}\` — bir saniye...`);
         const result = await fetchWebPage(url);
         if (result.ok && result.content) {
@@ -185,7 +186,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
     /\b(bak|getir|oku|aç|incele|öğren|kaydet|anlat)\b/.test(lower)
   ) {
     const url = extractUrl(rawText)!;
-    await message.channel.sendTyping().catch(() => null);
+    await sendMessageTyping(message).catch(() => null);
     await send(message, `🌐 Sayfa getiriliyor: \`${url}\`...`);
     const result = await fetchWebPage(url);
     const saveToMemory = /öğren|kaydet/.test(lower) && result.ok;
@@ -243,7 +244,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
   if (intent === "COMMAND_RUN") {
     const trigger = extractCommandTrigger(rawText);
     if (trigger) {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       const intro = commandExecIntro();
       await send(message, intro);
       const result = await executeToolCall(trigger.tool, trigger.params, message).catch(
@@ -464,7 +465,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
   if (intent === "WEB_FETCH") {
     const url = extractUrl(rawText);
     if (url) {
-      await message.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(message).catch(() => null);
       await send(message, `🌐 Sayfa getiriliyor: \`${url}\`...`);
       const result = await fetchWebPage(url);
       const doLearn = /öğren|kaydet/.test(lower) && result.ok;
@@ -567,7 +568,7 @@ export async function handleVbriAI(message: Message): Promise<void> {
     return;
   }
   processingChannels.add(channelId);
-  await message.channel.sendTyping().catch(() => null);
+  await sendMessageTyping(message).catch(() => null);
 
   try {
     logger.info({ user: message.author.username, text: rawText.slice(0, 80) }, "VBRI AI mesaj");

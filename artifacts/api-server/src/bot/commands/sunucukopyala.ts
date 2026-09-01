@@ -139,9 +139,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const channels = [...sourceGuild.channels.cache.values()]
     .filter((c) => c.type !== ChannelType.GuildCategory)
-    .sort((a, b) => a.position - b.position);
+    .filter((c) => "permissionOverwrites" in c && "position" in c)
+    .sort((a, b) => Number("position" in a ? a.position : 0) - Number("position" in b ? b.position : 0));
 
   for (const ch of channels) {
+    if (!("permissionOverwrites" in ch) || !("position" in ch)) continue;
     try {
       const parentId = "parentId" in ch && ch.parentId ? categoryMap.get(ch.parentId) : undefined;
 
@@ -159,7 +161,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           parent:               parentId,
           topic:                "topic" in ch ? (ch.topic ?? undefined) : undefined,
           nsfw:                 "nsfw" in ch ? ch.nsfw : false,
-          rateLimitPerUser:     "rateLimitPerUser" in ch ? ch.rateLimitPerUser : 0,
+          rateLimitPerUser:     "rateLimitPerUser" in ch ? (ch.rateLimitPerUser ?? 0) : 0,
           position:             ch.position,
           permissionOverwrites: overwrites,
           reason:               `Sunucu kopyalandı: ${sourceGuild.name}`,

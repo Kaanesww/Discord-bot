@@ -1,8 +1,11 @@
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import type { ModerationLog } from "@workspace/db";
 
+// @napi-rs/canvas exposes a compatible runtime context without DOM typings.
+type Ctx2D = any;
+
 function roundRect(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   x: number, y: number, w: number, h: number, r: number,
 ): void {
   ctx.beginPath();
@@ -17,9 +20,6 @@ function roundRect(
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Ctx2D = any;
 
 const ACTION_COLORS: Record<string, string> = {
   warn: "#faa61a",

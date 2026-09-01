@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import type { Message, GuildMember, Guild, TextChannel, GuildAuditLogsEntry, PermissionResolvable } from "discord.js";
 import { AuditLogEvent } from "discord.js";
 import { logger } from "../lib/logger";
+import { sendMessageChannel } from "./types";
 
 // ── DB yardımcıları ──────────────────────────────────────────────────────────
 
@@ -62,10 +63,14 @@ export async function handleSpam(message: Message): Promise<boolean> {
     const action = cfg.spamAction;
     const member = message.member;
     if (action === "warn") {
-      await message.channel.send(`⚠️ ${message.author} spam yapıyorsun!`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} spam yapıyorsun!`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "mute") {
       await member.timeout(5 * 60_000, "Guard: Spam koruma").catch(() => null);
-      await message.channel.send(`🔇 ${message.author} spam yaptığı için 5 dakika susturuldu.`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `🔇 ${message.author} spam yaptığı için 5 dakika susturuldu.`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "kick") {
       await member.kick("Guard: Spam koruma").catch(() => null);
     }
@@ -102,7 +107,9 @@ export async function handleLink(message: Message): Promise<boolean> {
     await message.delete().catch(() => null);
     const action = cfg.linkAction;
     if (action === "warn") {
-      await message.channel.send(`⚠️ ${message.author} link paylaşımı yasaktır!`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} link paylaşımı yasaktır!`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "kick") {
       await message.member.kick("Guard: Link koruma").catch(() => null);
     }
@@ -131,7 +138,9 @@ export async function handleEmoji(message: Message): Promise<boolean> {
   try {
     await message.delete().catch(() => null);
     if (cfg.emojiAction === "warn") {
-      await message.channel.send(`⚠️ ${message.author} çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     }
     await sendLog(message.guild!, cfg.logChannelId, `**Emoji** → ${message.author.username} — ${matches.length} emoji (max ${cfg.emojiMax})`);
   } catch (err) {

@@ -5,7 +5,7 @@
  * - Süre dolunca kazananı çeker ve sonucu gösterir
  */
 
-import { AttachmentBuilder, Client, TextChannel } from "discord.js";
+import { AttachmentBuilder, Client, TextChannel, ChannelType } from "discord.js";
 import { db } from "@workspace/db";
 import { giveawaysTable, type Giveaway } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -14,6 +14,17 @@ import { generateGiveawayCard } from "./giveawayCard";
 // Aktif çekilişler için zamanlayıcı haritası: giveawayId → intervalId
 const activeTimers = new Map<number, ReturnType<typeof setInterval>>();
 const activeEndTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function parseParticipants(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string" && /^\d{15,22}$/.test(value))
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 // ── DB yardımcıları ──────────────────────────────────────────────────────────
 
@@ -60,7 +71,7 @@ export async function addParticipant(giveawayId: number, userId: string): Promis
   const gw = rows[0];
   if (!gw || !gw.active) return { joined: false, count: 0 };
 
-  const participants: string[] = JSON.parse(gw.participants);
+  const participants = parseParticipants(gw.participants);
   if (participants.includes(userId)) return { joined: false, count: participants.length };
 
   participants.push(userId);
@@ -78,7 +89,7 @@ export async function endGiveaway(giveawayId: number, client: Client): Promise<{
   if (!gw || !gw.active) return {};
 
   // Kazananı çek
-  const participants: string[] = JSON.parse(gw.participants);
+  const participants = parseParticipants(gw.participants);
   let winnerId: string | undefined;
   let winnerName: string | undefined;
 
@@ -101,7 +112,9 @@ export async function endGiveaway(giveawayId: number, client: Client): Promise<{
   // Görseli güncelle
   if (gw.messageId) {
     try {
-      const channel = await client.channels.fetch(gw.channelId) as TextChannel;
+      const fetchedChannel = await client.channels.fetch(gw.channelId).catch(() => null);
+      if (!fetchedChannel || fetchedChannel.type !== ChannelType.GuildText) return {};
+      const channel = fetchedChannel as TextChannel;
       const message = await channel.messages.fetch(gw.messageId);
       const hostUser = await client.users.fetch(gw.hostId).catch(() => null);
 
@@ -159,7 +172,7 @@ export function startGiveawayTimers(giveaway: Giveaway, client: Client, hostName
       const gw = current[0];
       if (!gw || !gw.active || !gw.messageId) { clearInterval(interval); return; }
 
-      const participants: string[] = JSON.parse(gw.participants);
+      const participants = parseParticipants(gw.participants);
       const buf = await generateGiveawayCard({
         prize: gw.prize,
         hostName,

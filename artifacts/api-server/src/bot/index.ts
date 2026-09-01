@@ -3,8 +3,9 @@ import {
   AttachmentBuilder, TextChannel, ChannelType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ChannelSelectMenuBuilder,
-  PermissionFlagsBits, EmbedBuilder,
+  PermissionFlagsBits, PermissionsBitField, EmbedBuilder,
   Partials,
+  type ColorResolvable,
   type Message,
 } from "discord.js";
 import { readFileSync } from "fs";
@@ -48,6 +49,7 @@ import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChann
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
 import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl, setShowSharerName } from "./videoRequestSystem";
+import { sendMessageChannel, sendMessageTyping } from "./types";
 
 import { generateWarnCard } from "./warnCard";
 import { applyAutoRoles, getAutoRoles, getAllAutoRoles, addAutoRole, removeAutoRole, toggleAutoRole, clearAutoRoles } from "./autoRole";
@@ -496,8 +498,10 @@ async function pfxIdBan(m: Message, args: string[]): Promise<void> {
 
 async function pfxGiveRole(m: Message, args: string[]): Promise<void> {
   if (!m.guild || !m.guildId || !m.member) return;
-  const perm = await canUseMod(m.member, m.guildId, "mod");
-  if (!perm.ok) { await m.reply(perm.reason ?? "❌ Bu komutu kullanmak için yetkin yok."); return; }
+  if (!isOwner(m.author.id) && !m.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    await m.reply("❌ Rol vermek için **Rolleri Yönet** yetkisine ihtiyacın var.");
+    return;
+  }
 
   const target = m.mentions.members?.first();
   const role = m.mentions.roles?.first();
@@ -505,8 +509,17 @@ async function pfxGiveRole(m: Message, args: string[]): Promise<void> {
     await m.reply("❌ Kullanım: `rolver @kullanıcı @rol`");
     return;
   }
-  if (role.managed || role.position >= m.guild.members.me!.roles.highest.position) {
+  const botMember = m.guild.members.me;
+  if (!botMember) {
+    await m.reply("❌ Bot üye bilgisi alınamadı.");
+    return;
+  }
+  if (target.id === m.guild.ownerId || role.managed || role.position >= botMember.roles.highest.position) {
     await m.reply("❌ Bu rol botun en yüksek rolünün altında olmalı ve entegre rol olmamalı.");
+    return;
+  }
+  if (!isOwner(m.author.id) && role.position >= m.member.roles.highest.position) {
+    await m.reply("❌ Kendi en yüksek rolünün üstündeki veya aynı seviyedeki rolü veremezsin.");
     return;
   }
   try {
@@ -537,8 +550,8 @@ async function pfxTemizle(m: Message, args: string[]): Promise<void> {
   const n = Math.min(parseInt(args[0] ?? "10") || 10, 100);
   const msgs = await m.channel.messages.fetch({ limit: n + 1 });
   const deleted = await m.channel.bulkDelete(msgs, true);
-  const reply = await m.channel.send(`🗑️ **${Math.max(deleted.size - 1, 0)}** mesaj silindi.`);
-  setTimeout(() => reply.delete().catch(() => null), 4000);
+  const reply = await sendMessageChannel(m, `🗑️ **${Math.max(deleted.size - 1, 0)}** mesaj silindi.`);
+  if (reply) setTimeout(() => reply.delete().catch(() => null), 4000);
 }
 
 async function pfxTagRol(m: Message, args: string[]): Promise<void> {
@@ -673,7 +686,7 @@ async function pfxEmojiEkle(m: Message, args: string[]): Promise<void> {
       cur += l + "\n";
     }
     if (cur) chunks.push(cur);
-    for (const chunk of chunks) await m.channel.send(chunk);
+    for (const chunk of chunks) await sendMessageChannel(m, chunk);
     return;
   }
 
@@ -980,38 +993,6 @@ async function pfxMesajAt(m: Message, args: string[]): Promise<void> {
   } catch (err) {
     logger.error({ err }, "Mesaj gönderme hatası");
     await m.reply(`❌ Mesaj gönderilemedi: ${(err as Error).message}`);
-  }
-}
-
-// ── BOT OTOMATİK YÖNETİCİ ROLÜ ───────────────────────────────────────────────
-// Bot her sunucuda kendine Administrator rolü oluşturur ve atar.
-
-async function ensureBotAdminRole(guild: import("discord.js").Guild): Promise<void> {
-  try {
-    const botMember = await guild.members.fetchMe().catch(() => null);
-    if (!botMember) return;
-
-    // Zaten Administrator yetkisi var mı?
-    if (botMember.permissions.has(PermissionFlagsBits.Administrator)) return;
-
-    const roleName = "Bot Yöneticisi";
-    let adminRole = guild.roles.cache.find((r) => r.name === roleName);
-
-    if (!adminRole) {
-      adminRole = await guild.roles.create({
-        name: roleName,
-        permissions: [PermissionFlagsBits.Administrator],
-        color: 0x5865f2,
-        hoist: false,
-        reason: "Bot otomatik yönetici rolü",
-      });
-      logger.info({ guildId: guild.id, roleId: adminRole.id }, "Bot yönetici rolü oluşturuldu");
-    }
-
-    await botMember.roles.add(adminRole, "Bot otomatik yönetici rolü ataması");
-    logger.info({ guildId: guild.id, roleId: adminRole.id }, "Bot yönetici rolü atandı");
-  } catch (err) {
-    logger.warn({ err, guildId: guild.id }, "ensureBotAdminRole başarısız");
   }
 }
 
@@ -1784,13 +1765,13 @@ async function notifyEconLevelUp(m: Message, result: EconXpResult): Promise<void
       rankTitle: title,
       coinSymbol: COIN,
     });
-    await m.channel.send({
+    await sendMessageChannel(m, {
       content: `${m.author}`,
       files: [new AttachmentBuilder(buf, { name: "ekon-levelup.png" })],
     });
   } catch {
     const nextReward = econLevelReward(highest + 1);
-    await m.channel.send(
+    await sendMessageChannel(m,
       `💹 **${m.author.displayName}** ekonomi seviye **${highest}**'e ulaştı — ${title}!\n` +
       `${COIN} **+${result.totalReward.toLocaleString("en-US")} vivincy** ödülü eklendi!\n` +
       `\u200b *Sonraki seviye ödülü: ${COIN} ${nextReward.toLocaleString("en-US")} vivincy*`
@@ -2057,7 +2038,11 @@ async function pfxBlackjack(m: Message, args: string[]): Promise<void> {
   while (handValue(playerHand) < 21) {
     // Her tur için yeni prompt mesajı gönder (eski reaksiyon sorununu önler)
     await msg.edit(`🃏 **Blackjack** (Bahis: **${COIN} ${bet.toLocaleString("en-US")} vivincy**)\n${showHands()}`).catch(() => null);
-    const promptMsg = await m.channel.send(`${m.author} → ✅ **Kart al** | ❌ **Dur** *(15 sn)*`);
+    const promptMsg = await sendMessageChannel(m, `${m.author} → ✅ **Kart al** | ❌ **Dur** *(15 sn)*`);
+    if (!promptMsg) {
+      await m.reply("❌ Bu kanala mesaj gönderilemiyor.");
+      return;
+    }
     try { await promptMsg.react("✅"); await promptMsg.react("❌"); } catch { /**/ }
 
     let hit = false;
@@ -2152,7 +2137,7 @@ async function pfxDuel(m: Message, args: string[]): Promise<void> {
   for (const [xpR, user] of [[wXp, winner], [lXp, loser]] as const) {
     if (xpR?.leveled) {
       const highest = xpR.newLevels[xpR.newLevels.length - 1]!;
-      await m.channel.send(
+      await sendMessageChannel(m,
         `🎉 **${(user as typeof winner).displayName}** reached **Economy Level ${highest}** — ${econRankTitle(highest)}!\n` +
         `${COIN} **+${xpR.totalReward.toLocaleString("en-US")} vivincy** reward added!`
       ).catch(() => null);
@@ -2242,7 +2227,7 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
   for (const [xpR, user] of [[xpA, m.author], [xpB, target]] as const) {
     if (xpR?.leveled) {
       const highest = xpR.newLevels[xpR.newLevels.length - 1]!;
-      await m.channel.send(
+      await sendMessageChannel(m,
         `🎉 **${(user as typeof m.author).displayName}** reached **Economy Level ${highest}** — ${econRankTitle(highest)}!\n` +
         `${COIN} **+${xpR.totalReward.toLocaleString("en-US")} vivincy** reward added!`
       ).catch(() => null);
@@ -2253,7 +2238,7 @@ async function pfxRps(m: Message, args: string[]): Promise<void> {
 // EKONOMİ SEVİYE PROFİLİ
 async function pfxEkono(m: Message): Promise<void> {
   const target = m.mentions.users.first() ?? m.author;
-  await m.channel.sendTyping().catch(() => null);
+  await sendMessageTyping(m).catch(() => null);
   const bal = await getBalance(target.id);
   const xp = (bal as any).econXp as number ?? 0;
   const level = (bal as any).econLevel as number ?? 0;
@@ -2300,7 +2285,7 @@ async function pfxEkono(m: Message): Promise<void> {
 async function pfxEkonLider(m: Message): Promise<void> {
   const top = await getEconLeaderboard(10);
   if (!top.length) { await m.reply("❌ Henüz ekonomi verisi yok."); return; }
-  await m.channel.sendTyping().catch(() => null);
+  await sendMessageTyping(m).catch(() => null);
 
   const entries: EconLeaderboardEntry[] = await Promise.all(top.map(async (row, i) => {
     let username = "Kullanıcı";
@@ -2411,7 +2396,7 @@ async function pfxCal(m: Message, args: string[]): Promise<void> {
     try {
       const buf = await generateMusicCard(track, "queued", position);
       await statusMsg.delete().catch(() => null);
-      await m.channel.send({
+      await sendMessageChannel(m, {
         content: `➕ **Kuyruğa eklendi (#${position})**`,
         files: [new AttachmentBuilder(buf, { name: "queued.png" })],
       });
@@ -2519,7 +2504,10 @@ async function pfxSunucuKopyala(m: Message, args: string[]): Promise<void> {
   }
 
   await status.edit(`⏳ **[2/3]** Kanallar kopyalanıyor... (${created} tamamlandı)`);
-  const channels = [...sourceGuild.channels.cache.values()].filter((c) => c.type !== ChannelType.GuildCategory).sort((a, b) => a.position - b.position);
+  const channels = [...sourceGuild.channels.cache.values()]
+    .filter((c) => c.type !== ChannelType.GuildCategory)
+    .filter((c) => "position" in c)
+    .sort((a, b) => Number("position" in a ? a.position : 0) - Number("position" in b ? b.position : 0));
   for (const ch of channels) {
     const parentId = "parentId" in ch && ch.parentId ? categoryMap.get(ch.parentId) : undefined;
     if (ch.type === ChannelType.GuildText) {
@@ -2833,7 +2821,7 @@ function buildHelpCategoryEmbed(prefix: string, catKey: string): EmbedBuilder | 
   }
 
   return new EmbedBuilder()
-    .setColor(cat.color)
+    .setColor(cat.color as ColorResolvable)
     .setTitle(`${cat.icon} ${cat.label} Komutları`)
     .setDescription(`Bu kategoride **${cat.commands.length} komut** var. Prefix: \`${prefix}\``)
     .addFields(commandFields)
@@ -3330,7 +3318,7 @@ async function pfxSohbet(m: Message, args: string[]): Promise<void> {
     }
     await m.reply("⏳ Anonim özel sohbet kapatılıyor...");
     const closed = await closeAnonymousChannelConversation(m.guild, m.author.id);
-    if (!closed) await m.channel.send("ℹ️ Aktif bir anonim özel sohbetin yok.").catch(() => null);
+    if (!closed) await sendMessageChannel(m, "ℹ️ Aktif bir anonim özel sohbetin yok.").catch(() => null);
     return;
   }
   const targetId = action === "et" || action === "baslat" || action === "başlat" ? args[1] : args[0];
@@ -3366,7 +3354,11 @@ async function pfxCekilis(m: Message, args: string[]): Promise<void> {
     const giveaway = await createGiveaway({ guildId: m.guildId, channelId: m.channelId, hostId: m.author.id, prize, endsAt });
 
     const buf = await generateGiveawayCard({ prize, hostName: m.author.displayName, participantCount: 0, endsAt, active: true });
-    const sent = await m.channel.send({ files: [new AttachmentBuilder(buf, { name: "cekilis.png" })] });
+    const sent = await sendMessageChannel(m, { files: [new AttachmentBuilder(buf, { name: "cekilis.png" })] });
+    if (!sent) {
+      await m.reply("❌ Bu kanala çekiliş mesajı gönderilemiyor.");
+      return;
+    }
     await setMessageId(giveaway.id, sent.id);
 
     // Güncellenen giveaway'i oluştur
@@ -3402,7 +3394,7 @@ async function pfxCekilis(m: Message, args: string[]): Promise<void> {
 
     await m.reply(`⏳ Çekiliş **#${gw.id}** sonlandırılıyor...`);
     const { winnerName } = await endGiveaway(gw.id, m.client);
-    if (!winnerName) { await m.channel.send(`😔 Çekiliş bitti ama katılımcı yoktu.`); }
+    if (!winnerName) { await sendMessageChannel(m, `😔 Çekiliş bitti ama katılımcı yoktu.`); }
     return;
   }
 
@@ -3419,7 +3411,16 @@ async function pfxCekilis(m: Message, args: string[]): Promise<void> {
     if (gw.messageId) {
       try {
         const msg = await m.channel.messages.fetch(gw.messageId);
-        const participants: string[] = JSON.parse(gw.participants);
+        const participants = (() => {
+          try {
+            const parsed: unknown = JSON.parse(gw.participants);
+            return Array.isArray(parsed)
+              ? parsed.filter((value): value is string => typeof value === "string" && /^\d{15,22}$/.test(value))
+              : [];
+          } catch {
+            return [];
+          }
+        })();
         const hostUser = await m.client.users.fetch(gw.hostId).catch(() => null);
         const buf = await generateGiveawayCard({
           prize: gw.prize, hostName: hostUser?.displayName ?? "?",
@@ -3437,7 +3438,16 @@ async function pfxCekilis(m: Message, args: string[]): Promise<void> {
     const list = await getActiveGiveaways(m.guildId);
     if (!list.length) { await m.reply("📋 Şu an bu sunucuda aktif çekiliş yok."); return; }
     const lines = list.map((gw) => {
-      const participants: string[] = JSON.parse(gw.participants);
+      const participants = (() => {
+        try {
+          const parsed: unknown = JSON.parse(gw.participants);
+          return Array.isArray(parsed)
+            ? parsed.filter((value): value is string => typeof value === "string" && /^\d{15,22}$/.test(value))
+            : [];
+        } catch {
+          return [];
+        }
+      })();
       const remaining = Math.max(0, Math.ceil((gw.endsAt.getTime() - Date.now()) / 1000));
       const h = Math.floor(remaining / 3600); const mn = Math.floor((remaining % 3600) / 60);
       const timeStr = remaining === 0 ? "Bitiyor" : (h > 0 ? `${h}sa ${mn}dk` : `${mn}dk`);
@@ -3562,7 +3572,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
     // Herkes listeyi görebilir
     const sub = args[0]?.toLowerCase();
     if (!sub || sub === "liste" || sub === "list") {
-      await m.channel.sendTyping().catch(() => null);
+      await sendMessageTyping(m).catch(() => null);
       const entries = getMaintenanceList();
       let ownerName = "Bot Sahibi";
       try {
@@ -3740,7 +3750,12 @@ const prefixHandlers: Record<string, PfxHandler> = {
       }
       // Hem "discord.gg/xxx" hem "https://discord.gg/xxx" formatlarını kabul et
       const normalized = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
-      await setInviteUrl(gid, normalized);
+      try {
+        await setInviteUrl(gid, normalized);
+      } catch (err) {
+        await m.reply(`❌ ${err instanceof Error ? err.message : "Geçersiz watermark URL'si."}`);
+        return;
+      }
       await m.reply(
         `✅ Davet linki ayarlandı!\n` +
         `Bundan sonra onaylanan her video/fotoğrafın üstünde şu link görünecek:\n` +
@@ -3845,7 +3860,24 @@ export async function startBot(): Promise<void> {
       logger.warn({ err }, "Bot sahibi belirlenemedi");
     }
 
-    const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot+applications.commands`;
+    const invitePermissions = PermissionsBitField.resolve([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.AttachFiles,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.AddReactions,
+      PermissionFlagsBits.ManageMessages,
+      PermissionFlagsBits.ManageChannels,
+      PermissionFlagsBits.ManageRoles,
+      PermissionFlagsBits.ManageWebhooks,
+      PermissionFlagsBits.ModerateMembers,
+      PermissionFlagsBits.KickMembers,
+      PermissionFlagsBits.BanMembers,
+      PermissionFlagsBits.Connect,
+      PermissionFlagsBits.Speak,
+    ]).toString();
+    const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=${invitePermissions}&scope=bot+applications.commands`;
     logger.info({ inviteUrl }, "Davet URL:");
 
     // ── Vivincy coin uygulama emojisi ────────────────────────────────────────
@@ -3898,20 +3930,10 @@ export async function startBot(): Promise<void> {
       );
     }
 
-    // ── Bot otomatik yönetici rolü (tüm sunucular) ────────────────────────────
-    for (const guild of c.guilds.cache.values()) {
-      ensureBotAdminRole(guild).catch((err) =>
-        logger.warn({ err, guildId: guild.id }, "Otomatik yönetici rolü atanamadı"),
-      );
-    }
   });
 
-  // ── Bot yeni sunucuya katıldığında otomatik admin rolü ────────────────────
   client.on(Events.GuildCreate, async (guild) => {
     logger.info({ guildId: guild.id, guildName: guild.name }, "Yeni sunucuya katıldı");
-    await ensureBotAdminRole(guild).catch((err) =>
-      logger.warn({ err, guildId: guild.id }, "GuildCreate: otomatik admin rolü atanamadı"),
-    );
   });
 
   // Kullanıcı sunucu etiketini etkinleştirdiğinde/kaldırdığında tetiklenir.
@@ -4073,7 +4095,7 @@ export async function startBot(): Promise<void> {
     if (customId.startsWith("anon_confirm_account:")) {
       const result = await handleAnonymousButton(customId, interaction.user.id, client).catch((err) => {
         logger.error({ err }, "Anonim hesap onay butonu hatası");
-        return { handled: true, content: "❌ Hesap oluşturulamadı." };
+        return { handled: true, content: "❌ Hesap oluşturulamadı.", accountId: undefined };
       });
       const components = result.accountId
         ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -4509,9 +4531,9 @@ export async function startBot(): Promise<void> {
           avatarUrl: message.author.displayAvatarURL({ extension: "png", size: 256 }),
           oldLevel: result.oldLevel, newLevel: result.newLevel,
         });
-        await message.channel.send({ content: `${message.author}`, files: [new AttachmentBuilder(buf, { name: "levelup.png" })] });
+        await sendMessageChannel(message, { content: `${message.author}`, files: [new AttachmentBuilder(buf, { name: "levelup.png" })] });
       } catch {
-        await message.channel.send(`🎉 ${message.author} **${result.newLevel}. seviyeye** ulaştı!`).catch(() => null);
+        await sendMessageChannel(message, `🎉 ${message.author} **${result.newLevel}. seviyeye** ulaştı!`).catch(() => null);
       }
     }
   });
