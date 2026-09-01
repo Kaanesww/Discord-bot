@@ -270,7 +270,7 @@ export async function changeAnonymousAvatar(
 ): Promise<{ ok: boolean; message: string }> {
   const account = await getOwnAnonymousProfile(guild.id, userId);
   if (!account) return { ok: false, message: "Aktif anonim profilin bulunamadı." };
-  if (!account.privateChannelId || account.webhookToken === "private-channel") {
+  if (!account.privateChannelId) {
     return { ok: false, message: "Önce anonim özel kanalına katılmalısın." };
   }
   const charged = await pool.query(
@@ -282,7 +282,11 @@ export async function changeAnonymousAvatar(
   if (!charged.rowCount) {
     return { ok: false, message: `❌ Profil fotoğrafını değiştirmek için **100 puan** gerekiyor. Mevcut puanın: **${account.points}**.` };
   }
-  const webhook = new WebhookClient({ id: account.webhookId, token: account.webhookToken });
+  const webhook = await getOrCreatePrivateWebhook(guild, account);
+  if (!webhook) {
+    await pool.query(`UPDATE anonymous_accounts SET points = points + 100 WHERE id = $1`, [account.id]);
+    return { ok: false, message: "❌ Anonim özel kanal webhook'u bulunamadı; puanın iade edildi." };
+  }
   try {
     await webhook.edit({ avatar: avatarUrl });
     webhook.destroy();
