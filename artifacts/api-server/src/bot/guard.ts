@@ -1,37 +1,235 @@
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { guardSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import type { Message, GuildMember, Guild, TextChannel, GuildAuditLogsEntry, PermissionResolvable } from "discord.js";
-import { AuditLogEvent } from "discord.js";
+import type {
+  Message,
+  PartialMessage,
+  GuildMember,
+  Guild,
+  TextChannel,
+  GuildAuditLogsEntry,
+  PermissionResolvable,
+} from "discord.js";
+import { AuditLogEvent, EmbedBuilder } from "discord.js";
 import { logger } from "../lib/logger";
+import { sendMessageChannel } from "./types";
 
 // ── DB yardımcıları ──────────────────────────────────────────────────────────
 
+type GuardConfig = typeof guardSettingsTable.$inferSelect;
+const guardCache = new Map<string, { value: GuardConfig; expiresAt: number }>();
+const GUARD_CACHE_TTL = 15_000;
+
+const defaultGuard = (guildId: string): GuardConfig => ({
+  guildId,
+  spamEnabled: false,
+  spamThreshold: 5,
+  spamAction: "delete",
+  linkEnabled: false,
+  linkAction: "delete",
+  linkWhitelist: "[]",
+  botEnabled: false,
+  botAction: "kick",
+  emojiEnabled: false,
+  emojiMax: 5,
+  emojiAction: "delete",
+  roleEnabled: false,
+  channelEnabled: false,
+  logChannelId: null,
+  banLogChannelId: null,
+  muteLogChannelId: null,
+  messageLogChannelId: null,
+  deletedMessageLogChannelId: null,
+  generalLogChannelId: null,
+});
+
+export async function ensureGuardSchema(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guard_settings (
+      guild_id TEXT PRIMARY KEY NOT NULL,
+      spam_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      spam_threshold INTEGER NOT NULL DEFAULT 5,
+      spam_action TEXT NOT NULL DEFAULT 'delete',
+      link_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      link_action TEXT NOT NULL DEFAULT 'delete',
+      link_whitelist TEXT NOT NULL DEFAULT '[]',
+      bot_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      bot_action TEXT NOT NULL DEFAULT 'kick',
+      emoji_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      emoji_max INTEGER NOT NULL DEFAULT 5,
+      emoji_action TEXT NOT NULL DEFAULT 'delete',
+      role_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      channel_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      log_channel_id TEXT,
+      ban_log_channel_id TEXT,
+      mute_log_channel_id TEXT,
+      message_log_channel_id TEXT,
+      deleted_message_log_channel_id TEXT,
+      general_log_channel_id TEXT
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE guard_settings
+      ADD COLUMN IF NOT EXISTS ban_log_channel_id TEXT,
+      ADD COLUMN IF NOT EXISTS mute_log_channel_id TEXT,
+      ADD COLUMN IF NOT EXISTS message_log_channel_id TEXT,
+      ADD COLUMN IF NOT EXISTS deleted_message_log_channel_id TEXT,
+      ADD COLUMN IF NOT EXISTS general_log_channel_id TEXT
+  `);
+}
+
 export async function getGuard(guildId: string) {
+  const cached = guardCache.get(guildId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
   const rows = await db.select().from(guardSettingsTable).where(eq(guardSettingsTable.guildId, guildId)).limit(1);
-  return rows[0] ?? {
-    guildId, spamEnabled: false, spamThreshold: 5, spamAction: "delete",
-    linkEnabled: false, linkAction: "delete", linkWhitelist: "[]",
-    botEnabled: false, botAction: "kick",
-    emojiEnabled: false, emojiMax: 5, emojiAction: "delete",
-    roleEnabled: false, channelEnabled: false, logChannelId: null,
-  };
+  const value = rows[0] ?? defaultGuard(guildId);
+  guardCache.set(guildId, { value, expiresAt: Date.now() + GUARD_CACHE_TTL });
+  return value;
 }
 
 export async function setGuard(guildId: string, patch: Partial<typeof guardSettingsTable.$inferInsert>): Promise<void> {
   await db.insert(guardSettingsTable)
     .values({ guildId, ...patch })
     .onConflictDoUpdate({ target: guardSettingsTable.guildId, set: patch });
+  guardCache.delete(guildId);
 }
 
 // ── Log gönder ───────────────────────────────────────────────────────────────
 
-async function sendLog(guild: Guild, logChannelId: string | null | undefined, msg: string): Promise<void> {
+export type GuardLogCategory = "guard" | "ban" | "mute" | "message" | "deletedMessage" | "general";
+
+const logTitles: Record<GuardLogCategory, string> = {
+  guard: "Guard Olayı",
+  ban: "Ban Logu",
+  mute: "Mute Logu",
+  message: "Mesaj Logu",
+  deletedMessage: "Silinen Mesaj Logu",
+  general: "Genel İşlem Logu",
+};
+
+async function sendLogToChannel(guild: Guild, logChannelId: string | null | undefined, category: GuardLogCategory, msg: string): Promise<void> {
   if (!logChannelId) return;
   try {
     const ch = await guild.channels.fetch(logChannelId) as TextChannel | null;
-    if (ch?.isTextBased()) await ch.send(`🛡️ **Guard Log** | ${msg}`);
+    if (ch?.isSendable()) {
+      const embed = new EmbedBuilder()
+        .setColor(category === "general" ? 0x5865f2 : 0xed4245)
+        .setTitle(`🛡️ ${logTitles[category]}`)
+        .setDescription(msg.slice(0, 4000))
+        .setFooter({ text: guild.name })
+        .setTimestamp();
+      await ch.send({ embeds: [embed] });
+    }
   } catch { /* log kanalı bulunamadı */ }
+}
+
+function uniqueChannelIds(ids: Array<string | null | undefined>): string[] {
+  return [...new Set(ids.filter((id): id is string => Boolean(id)))];
+}
+
+export async function sendGuardLog(guild: Guild, category: GuardLogCategory, msg: string): Promise<void> {
+  const cfg = await getGuard(guild.id);
+  const specific = category === "ban"
+    ? cfg.banLogChannelId
+    : category === "mute"
+      ? cfg.muteLogChannelId
+      : category === "message"
+        ? cfg.messageLogChannelId
+        : category === "deletedMessage"
+          ? cfg.deletedMessageLogChannelId
+          : category === "general"
+            ? cfg.generalLogChannelId
+            : cfg.logChannelId;
+  const ids = category === "general"
+    ? uniqueChannelIds([cfg.generalLogChannelId])
+    : uniqueChannelIds([specific, cfg.generalLogChannelId]);
+  await Promise.all(ids.map((id) => sendLogToChannel(guild, id, category, msg)));
+}
+
+async function sendLog(guild: Guild, logChannelId: string | null | undefined, msg: string): Promise<void> {
+  const cfg = await getGuard(guild.id);
+  const ids = uniqueChannelIds([logChannelId, cfg.generalLogChannelId]);
+  await Promise.all(ids.map((id) => sendLogToChannel(guild, id, "guard", msg)));
+}
+
+// ── Genel audit logu ─────────────────────────────────────────────────────────
+
+function auditActionLabel(action: AuditLogEvent): string {
+  const labels: Partial<Record<AuditLogEvent, string>> = {
+    [AuditLogEvent.MemberBanAdd]: "Üye yasaklandı",
+    [AuditLogEvent.MemberBanRemove]: "Üye yasağı kaldırıldı",
+    [AuditLogEvent.MemberKick]: "Üye sunucudan atıldı",
+    [AuditLogEvent.MemberUpdate]: "Üye güncellendi",
+    [AuditLogEvent.MemberRoleUpdate]: "Üye rolü güncellendi",
+    [AuditLogEvent.RoleCreate]: "Rol oluşturuldu",
+    [AuditLogEvent.RoleDelete]: "Rol silindi",
+    [AuditLogEvent.RoleUpdate]: "Rol güncellendi",
+    [AuditLogEvent.ChannelCreate]: "Kanal oluşturuldu",
+    [AuditLogEvent.ChannelDelete]: "Kanal silindi",
+    [AuditLogEvent.ChannelUpdate]: "Kanal güncellendi",
+    [AuditLogEvent.MessageDelete]: "Mesaj silindi",
+    [AuditLogEvent.MessageBulkDelete]: "Mesajlar toplu silindi",
+    [AuditLogEvent.MessagePin]: "Mesaj sabitlendi",
+    [AuditLogEvent.MessageUnpin]: "Mesaj sabitlemesi kaldırıldı",
+    [AuditLogEvent.WebhookCreate]: "Webhook oluşturuldu",
+    [AuditLogEvent.WebhookDelete]: "Webhook silindi",
+    [AuditLogEvent.WebhookUpdate]: "Webhook güncellendi",
+    [AuditLogEvent.GuildUpdate]: "Sunucu ayarları güncellendi",
+    [AuditLogEvent.MemberPrune]: "Üyeler temizlendi",
+    [AuditLogEvent.MemberMove]: "Üye taşındı",
+    [AuditLogEvent.MemberDisconnect]: "Üyenin ses bağlantısı kesildi",
+    [AuditLogEvent.BotAdd]: "Bot eklendi",
+  };
+  return labels[action] ?? `Discord işlemi (#${action})`;
+}
+
+function hasTimeoutChange(entry: GuildAuditLogsEntry): boolean {
+  return (entry.changes ?? []).some((change) =>
+    String(change.key).includes("communication_disabled_until"),
+  );
+}
+
+export async function handleAuditLogEntry(guild: Guild, entry: GuildAuditLogsEntry): Promise<void> {
+  const executor = entry.executor?.id ? `<@${entry.executor.id}>` : "Bilinmeyen kullanıcı";
+  const target = entry.targetId ? `<@${entry.targetId}>` : "Bilinmeyen hedef";
+  const reason = entry.reason ? `\n**Sebep:** ${entry.reason}` : "";
+  const details = `**İşlemi yapan:** ${executor}\n**Hedef:** ${target}${reason}`;
+
+  if (entry.action === AuditLogEvent.MemberBanAdd || entry.action === AuditLogEvent.MemberBanRemove) {
+    await sendGuardLog(guild, "ban", `${auditActionLabel(entry.action)}\n${details}`);
+  } else if (entry.action === AuditLogEvent.MemberUpdate && hasTimeoutChange(entry)) {
+    await sendGuardLog(guild, "mute", `Üyenin susturma durumu değiştirildi\n${details}`);
+  } else {
+    await sendGuardLog(guild, "general", `**${auditActionLabel(entry.action)}**\n${details}`);
+  }
+}
+
+// ── Mesaj logları ────────────────────────────────────────────────────────────
+
+type MessageLogEvent = "message" | "edited" | "deleted";
+
+export async function handleMessageLog(
+  guild: Guild,
+  message: Message | PartialMessage,
+  event: MessageLogEvent,
+): Promise<void> {
+  if (message.author?.bot) return;
+  const content = message.content?.trim() || "(mesaj içeriği önbellekte yok)";
+  const attachments = message.attachments?.size
+    ? `\n**Ekler:** ${message.attachments.size} dosya`
+    : "";
+  const eventLabel = event === "message" ? "Yeni mesaj" : event === "edited" ? "Mesaj düzenlendi" : "Mesaj silindi";
+  const category: GuardLogCategory = event === "deleted" ? "deletedMessage" : "message";
+  await sendGuardLog(
+    guild,
+    category,
+    `**${eventLabel}**\n**Kullanıcı:** ${message.author ? `<@${message.author.id}>` : "Bilinmeyen kullanıcı"}\n` +
+      `**Kanal:** <#${message.channelId}>\n**İçerik:** ${content}${attachments}`,
+  );
+}
+
+export async function handleBulkMessageLog(guild: Guild, channelId: string, count: number): Promise<void> {
+  await sendGuardLog(guild, "deletedMessage", `**Toplu mesaj silindi**\n**Kanal:** <#${channelId}>\n**Mesaj sayısı:** ${count}`);
 }
 
 // ── Spam: in-memory hız limiti ───────────────────────────────────────────────
@@ -62,10 +260,14 @@ export async function handleSpam(message: Message): Promise<boolean> {
     const action = cfg.spamAction;
     const member = message.member;
     if (action === "warn") {
-      await message.channel.send(`⚠️ ${message.author} spam yapıyorsun!`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} spam yapıyorsun!`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "mute") {
       await member.timeout(5 * 60_000, "Guard: Spam koruma").catch(() => null);
-      await message.channel.send(`🔇 ${message.author} spam yaptığı için 5 dakika susturuldu.`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `🔇 ${message.author} spam yaptığı için 5 dakika susturuldu.`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "kick") {
       await member.kick("Guard: Spam koruma").catch(() => null);
     }
@@ -102,7 +304,9 @@ export async function handleLink(message: Message): Promise<boolean> {
     await message.delete().catch(() => null);
     const action = cfg.linkAction;
     if (action === "warn") {
-      await message.channel.send(`⚠️ ${message.author} link paylaşımı yasaktır!`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} link paylaşımı yasaktır!`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     } else if (action === "kick") {
       await message.member.kick("Guard: Link koruma").catch(() => null);
     }
@@ -131,7 +335,9 @@ export async function handleEmoji(message: Message): Promise<boolean> {
   try {
     await message.delete().catch(() => null);
     if (cfg.emojiAction === "warn") {
-      await message.channel.send(`⚠️ ${message.author} çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`).then(m => setTimeout(() => m.delete().catch(() => null), 5000));
+      await sendMessageChannel(message, `⚠️ ${message.author} çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`).then((m) => {
+        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
+      });
     }
     await sendLog(message.guild!, cfg.logChannelId, `**Emoji** → ${message.author.username} — ${matches.length} emoji (max ${cfg.emojiMax})`);
   } catch (err) {

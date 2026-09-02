@@ -1,23 +1,19 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, boolean, timestamp } from "drizzle-orm/pg-core";
 
-// Sunucu başına moderasyon yapılandırması.
-// Roller JSON dizisi olarak saklanır: '["roleId1","roleId2"]'
-// Boş dizi = Discord native permission kontrolü yapılır.
-export const moderationSettingsTable = sqliteTable("moderation_settings", {
+export const moderationSettingsTable = pgTable("moderation_settings", {
   guildId:           text("guild_id").primaryKey(),
-  enabled:           integer("enabled", { mode: "boolean" }).notNull().default(false),
-  logChannelId:      text("log_channel_id"),         // mod işlem logu kanalı
+  enabled:           boolean("enabled").notNull().default(false),
+  logChannelId:      text("log_channel_id"),
   banRoles:          text("ban_roles").notNull().default("[]"),
   kickRoles:         text("kick_roles").notNull().default("[]"),
   warnRoles:         text("warn_roles").notNull().default("[]"),
   timeoutRoles:      text("timeout_roles").notNull().default("[]"),
-  muteRoles:         text("mute_roles").notNull().default("[]"),    // kilitle / ac
-  temizleRoles:      text("temizle_roles").notNull().default("[]"), // temizle / nuke
-  // ── Kademeli yetki sistemi ─────────────────────────────────────────────────
-  modRoles:          text("mod_roles").notNull().default("[]"),         // Yetkili: ban/kick istek olarak gider, onay gerekir
-  seniorModRoles:    text("senior_mod_roles").notNull().default("[]"),  // Üst Yetkili: istekleri onaylar + doğrudan yürütür
-  approvalChannelId: text("approval_channel_id"),                       // Ban/kick onay isteklerinin gideceği kanal
-  updatedAt:         integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  muteRoles:         text("mute_roles").notNull().default("[]"),
+  temizleRoles:      text("temizle_roles").notNull().default("[]"),
+  modRoles:          text("mod_roles").notNull().default("[]"),
+  seniorModRoles:    text("senior_mod_roles").notNull().default("[]"),
+  approvalChannelId: text("approval_channel_id"),
+  updatedAt:         timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type ModerationSettings = typeof moderationSettingsTable.$inferSelect;

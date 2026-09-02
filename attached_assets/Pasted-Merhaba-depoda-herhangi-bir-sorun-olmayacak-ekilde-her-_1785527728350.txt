@@ -1,0 +1,27 @@
+Merhaba depoda herhangi bir sorun olmayacak şekilde her eklenen şeyi düzenli olarak pushla ve botu çalıştır ardından
+
+-Üye, sunucuya video eklemek için bot üzerinden, video paylaşacaği kanalı seçecek , ve açıklama ekleyecek
+
+-Üye,bot üzerinden isteği yollayacak.
+
+-Bot, belirlenen kanalın Moderasyon kanalına Üyenin isteğini atıcak.(Sunucu sahibi moderesyon kanalını seçecek istekler oraya gidecek)
+
+-Ownerlar,isteği inceleyebilecek. (İçeriğe Bakacak)
+
+-Ownerlar, eğer onay verirse, bot o kanala açıklamasıyla birlikte içeriği yükleyecek.
+
+-Ownerlar, eğer onay vermezse, bot o isteği silecek. Videonun boyutu 95mb'yi geçmeyecek
+
+1 hour ago
+Mevcut botu inceliyorum ve video istek sistemini ekliyorum.
+
+Mevcut yapıyı anlıyorum. Şimdi video istek sistemini ekliyorum. İlgili dosyaları okuyorum.
+
+Sistemi anlıyorum. Şimdi video istek sistemini yazıyorum — DB şeması, modül ve bot entegrasyonu paralel olarak.
+
+You've reached your daily free quota limit. It will reset at 12:00 AM UTC.
+
+Merhaba depoda herhangi bir sorun olmayacak şekilde her eklenen şeyi düzenli olarak pushla ve botu çalıştır ardından -Üye, sunucuya video eklemek için bot üzerinden, video paylaşacaği kanalı seçecek , ve açıklama ekleyecek -Üye,bot üzerinden isteği yollayacak. -Bot, belirlenen kanalın Moderasyon kanalına Üyenin isteğini atıcak.(Sunucu sahibi moderesyon kanalını seçecek istekler oraya gidecek) -Ownerlar,isteği inceleyebilecek. (İçeriğe Bakacak) -Ownerlar, eğer onay verirse, bot o kanala açıklamasıyla birlikte içeriği yükleyecek. -Ownerlar, eğer onay vermezse, bot o isteği silecek. Videonun boyutu 95mb'yi geçmeyecek Agent activity Mevcut botu inceliyorum ve video istek sistemini ekliyorum. Agent activity Mevcut yapıyı anlıyorum. Şimdi video istek sistemini ekliyorum. İlgili dosyaları okuyorum. Agent activity Sistemi anlıyorum. Şimdi video istek sistemini yazıyorum — DB şeması, modül ve bot entegrasyonu paralel olarak. Agent activity Agent activity Agent activity
+You're out of credits.
+
+Make, test, iterate…

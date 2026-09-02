@@ -54,6 +54,8 @@ async function buildAll() {
       "@snazzah/davey-wasm32-wasi",
       "discord.js",
       "@discordjs/voice",
+      "@distube/ytdl-core",
+      "@distube/ytdl-core/",
       "@discordjs/rest",
       "@discordjs/ws",
       "@discordjs/brokers",

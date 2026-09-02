@@ -25,28 +25,28 @@ export async function generateLevelUpCard(opts: {
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d") as any;
 
-  // Arka plan - parlak kutlama gradyanı
+  // Arka plan — referans tasarıma uygun siyah/antrasit tema
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#0f0030");
-  bg.addColorStop(0.4, "#1a0050");
-  bg.addColorStop(1, "#300020");
+  bg.addColorStop(0, "#050505");
+  bg.addColorStop(0.5, "#161616");
+  bg.addColorStop(1, "#050505");
   roundRect(ctx, 0, 0, W, H, 18);
   ctx.fillStyle = bg;
   ctx.fill();
 
   // Merkez parlaklık
   const centerGlow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, 250);
-  centerGlow.addColorStop(0, "rgba(255,200,0,0.22)");
-  centerGlow.addColorStop(0.4, "rgba(235,69,158,0.12)");
+  centerGlow.addColorStop(0, "rgba(255,255,255,0.10)");
+  centerGlow.addColorStop(0.4, "rgba(255,255,255,0.03)");
   centerGlow.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = centerGlow;
   ctx.fillRect(0, 0, W, H);
 
   // Kenarlık efekti
   const border = ctx.createLinearGradient(0, 0, W, H);
-  border.addColorStop(0, "#ffd700");
-  border.addColorStop(0.5, "#eb459e");
-  border.addColorStop(1, "#5865f2");
+  border.addColorStop(0, "#ffffff");
+  border.addColorStop(0.5, "#777777");
+  border.addColorStop(1, "#ffffff");
   roundRect(ctx, 0, 0, W, H, 18);
   ctx.strokeStyle = border;
   ctx.lineWidth = 3;
@@ -58,7 +58,7 @@ export async function generateLevelUpCard(opts: {
     [120, 170], [580, 40], [350, 15], [400, 185],
   ] as [number, number][];
   for (const [sx, sy] of stars) {
-    ctx.fillStyle = `rgba(255,215,0,${Math.random() * 0.5 + 0.3})`;
+    ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.25 + 0.15})`;
     ctx.beginPath();
     ctx.arc(sx, sy, 2.5, 0, Math.PI * 2);
     ctx.fill();
@@ -70,8 +70,8 @@ export async function generateLevelUpCard(opts: {
   const avY = H / 2;
 
   const ring = ctx.createLinearGradient(avX - avR, avY - avR, avX + avR, avY + avR);
-  ring.addColorStop(0, "#ffd700");
-  ring.addColorStop(1, "#eb459e");
+  ring.addColorStop(0, "#ffffff");
+  ring.addColorStop(1, "#777777");
   ctx.beginPath();
   ctx.arc(avX, avY, avR + 5, 0, Math.PI * 2);
   ctx.strokeStyle = ring;
@@ -98,13 +98,13 @@ export async function generateLevelUpCard(opts: {
   // "SEVİYE ATLADIN!" başlığı
   const textX = avX + avR + 30;
   const titleGrad = ctx.createLinearGradient(textX, 0, textX + 400, 0);
-  titleGrad.addColorStop(0, "#ffd700");
+  titleGrad.addColorStop(0, "#ffffff");
   titleGrad.addColorStop(0.5, "#fff");
-  titleGrad.addColorStop(1, "#eb459e");
+  titleGrad.addColorStop(1, "#9a9a9a");
   ctx.fillStyle = titleGrad;
   ctx.font = "bold 30px sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText("🎉  SEVİYE ATLADIN!", textX, 64);
+  ctx.fillText("SEVİYE ATLADIN!", textX, 64);
 
   // Kullanıcı adı
   ctx.fillStyle = "rgba(255,255,255,0.75)";
@@ -127,22 +127,22 @@ export async function generateLevelUpCard(opts: {
   ctx.fillText(String(opts.oldLevel), textX + 45, lvlY + 14);
 
   // Ok
-  ctx.fillStyle = "#ffd700";
+  ctx.fillStyle = "#d8d8d8";
   ctx.font = "bold 28px sans-serif";
   ctx.fillText("→", textX + 104, lvlY + 10);
 
   // Yeni seviye kutusu (parlak)
   const newBg = ctx.createLinearGradient(textX + 140, lvlY - 28, textX + 230, lvlY + 16);
-  newBg.addColorStop(0, "rgba(255,215,0,0.3)");
-  newBg.addColorStop(1, "rgba(235,69,158,0.3)");
+  newBg.addColorStop(0, "rgba(255,255,255,0.22)");
+  newBg.addColorStop(1, "rgba(120,120,120,0.18)");
   roundRect(ctx, textX + 140, lvlY - 28, 90, 44, 10);
   ctx.fillStyle = newBg;
   ctx.fill();
   roundRect(ctx, textX + 140, lvlY - 28, 90, 44, 10);
-  ctx.strokeStyle = "#ffd700";
+  ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  ctx.fillStyle = "#ffd700";
+  ctx.fillStyle = "#ffffff";
   ctx.font = "11px sans-serif";
   ctx.textAlign = "center";
   ctx.fillText("YENİ", textX + 185, lvlY - 10);

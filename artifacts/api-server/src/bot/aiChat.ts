@@ -1,6 +1,10 @@
 /**
  * VBRI AI — Giriş Noktası
- * Eski Gemini bağımlılığı kaldırıldı. Tamamen yerel VBRI AI motoru kullanılıyor.
+ * VBRIaimotor motoruna yönlendirir.
  */
 
-export { handleVbriAI as handleAiMessage, clearChannelHistory, getHistorySize } from "./vbriAI/engine";
+export {
+  handleVBRIaimotor as handleAiMessage,
+  clearChannelHistory,
+  getHistorySize,
+} from "./VBRIaimotor/index";
