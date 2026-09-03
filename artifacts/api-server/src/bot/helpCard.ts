@@ -118,6 +118,7 @@ const ALL_HELP_CATEGORIES: HelpCategory[] = [
     commands: [
       { name: "setprefix <yeni>",              desc: "Sunucu prefix'ini değiştirir" },
       { name: "botadmin liste",                desc: "Bot admin panelini açar (bot sahibi)" },
+      { name: "botadmin seç/kaldır @kullanıcı", desc: "Bot admin ekler veya kaldırır (bot sahibi)" },
       { name: "sunucukapat",                   desc: "Sunucuyu buton onayıyla geçici olarak kilitler (sunucu sahibi)" },
       { name: "sunucuaç",                      desc: "Sunucuyu buton onayıyla yeniden açar (sunucu sahibi)" },
       { name: "sunucukur",                     desc: "Tüm kanalları oluşturur" },

@@ -71,6 +71,7 @@ import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForC
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
 import { sendMediaRequest, handleVideoApprovalButton, setVideoModerationChannel, getVideoModerationChannel, getVideoSettings, addApprovalRole, removeApprovalRole, setInviteUrl, getInviteUrl, setShowSharerName } from "./videoRequestSystem";
 import { sendMessageChannel, sendMessageTyping } from "./types";
+import { ensureBotSchema } from "./schemaBootstrap";
 
 import { generateWarnCard } from "./warnCard";
 import { applyAutoRoles, getAutoRoles, getAllAutoRoles, addAutoRole, removeAutoRole, toggleAutoRole, clearAutoRoles } from "./autoRole";
@@ -3050,14 +3051,15 @@ async function pfxBotAdmin(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  if (["ekle", "add"].includes(sub) || ["çıkar", "cikar", "kaldır", "kaldir", "remove"].includes(sub)) {
+  if (["ekle", "add", "seç", "sec", "select"].includes(sub) ||
+      ["çıkar", "cikar", "kaldır", "kaldir", "remove"].includes(sub)) {
     const userId = m.mentions.users.first()?.id
       ?? args.slice(1).find((arg) => /^\d{15,20}$/.test(arg));
     if (!userId) {
-      await m.reply("❌ Kullanım: `botadmin ekle <Discord ID>` veya `botadmin çıkar <Discord ID>`");
+      await m.reply("❌ Kullanım: `botadmin seç @kullanıcı` veya `botadmin kaldır @kullanıcı`");
       return;
     }
-    const added = ["ekle", "add"].includes(sub)
+    const added = ["ekle", "add", "seç", "sec", "select"].includes(sub)
       ? await addBotAdmin(userId)
       : await removeBotAdmin(userId);
     await m.reply(added
@@ -3066,7 +3068,7 @@ async function pfxBotAdmin(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  await m.reply("❌ Kullanım: `botadmin aç/kapat` | `botadmin ekle <ID>` | `botadmin çıkar <ID>` | `botadmin liste`");
+  await m.reply("❌ Kullanım: `botadmin aç/kapat` | `botadmin seç @kullanıcı` | `botadmin kaldır @kullanıcı` | `botadmin liste`");
 }
 
 function protectionSetupRows(draft: ProtectionSetupDraft) {
@@ -4295,6 +4297,7 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     await ensureGuardSchema().catch((err) => logger.error({ err }, "Guard veritabanı şeması hazırlanamadı"));
+    await ensureBotSchema().catch((err) => logger.error({ err }, "Bot veritabanı şeması hazırlanamadı"));
     await ensureBotAdminSchema()
       .then(() => refreshBotAdminCache())
       .catch((err) => logger.error({ err }, "Bot admin veritabanı şeması hazırlanamadı"));
