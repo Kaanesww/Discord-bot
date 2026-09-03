@@ -14,4 +14,5 @@ export * from "./autoRoleSettings";
 export * from "./remoteModSettings";
 export * from "./remoteModAuthorized";
 export * from "./anonymousChat";
-export * from "./codeChannel";
+export * from "./botAdminSettings";
+export * from "./serverProtectionSettings";

@@ -5,6 +5,7 @@ import type {
   Message,
   PartialMessage,
   GuildMember,
+  PartialGuildMember,
   Guild,
   TextChannel,
   GuildAuditLogsEntry,
@@ -35,12 +36,15 @@ const defaultGuard = (guildId: string): GuardConfig => ({
   emojiAction: "delete",
   roleEnabled: false,
   channelEnabled: false,
+  logsEnabled: false,
   logChannelId: null,
   banLogChannelId: null,
   muteLogChannelId: null,
   messageLogChannelId: null,
   deletedMessageLogChannelId: null,
   generalLogChannelId: null,
+  protectionLogChannelId: null,
+  memberLogChannelId: null,
 });
 
 export async function ensureGuardSchema(): Promise<void> {
@@ -60,21 +64,27 @@ export async function ensureGuardSchema(): Promise<void> {
       emoji_action TEXT NOT NULL DEFAULT 'delete',
       role_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       channel_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      logs_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       log_channel_id TEXT,
       ban_log_channel_id TEXT,
       mute_log_channel_id TEXT,
       message_log_channel_id TEXT,
       deleted_message_log_channel_id TEXT,
       general_log_channel_id TEXT
+      , protection_log_channel_id TEXT
+      , member_log_channel_id TEXT
     )
   `);
   await pool.query(`
     ALTER TABLE guard_settings
+      ADD COLUMN IF NOT EXISTS logs_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS ban_log_channel_id TEXT,
       ADD COLUMN IF NOT EXISTS mute_log_channel_id TEXT,
       ADD COLUMN IF NOT EXISTS message_log_channel_id TEXT,
       ADD COLUMN IF NOT EXISTS deleted_message_log_channel_id TEXT,
       ADD COLUMN IF NOT EXISTS general_log_channel_id TEXT
+      , ADD COLUMN IF NOT EXISTS protection_log_channel_id TEXT
+      , ADD COLUMN IF NOT EXISTS member_log_channel_id TEXT
   `);
 }
 
@@ -96,7 +106,7 @@ export async function setGuard(guildId: string, patch: Partial<typeof guardSetti
 
 // ── Log gönder ───────────────────────────────────────────────────────────────
 
-export type GuardLogCategory = "guard" | "ban" | "mute" | "message" | "deletedMessage" | "general";
+export type GuardLogCategory = "guard" | "ban" | "mute" | "message" | "deletedMessage" | "general" | "protection" | "member";
 
 const logTitles: Record<GuardLogCategory, string> = {
   guard: "Guard Olayı",
@@ -105,6 +115,8 @@ const logTitles: Record<GuardLogCategory, string> = {
   message: "Mesaj Logu",
   deletedMessage: "Silinen Mesaj Logu",
   general: "Genel İşlem Logu",
+  protection: "Sunucu Koruma Logu",
+  member: "Giriş / Çıkış Logu",
 };
 
 async function sendLogToChannel(guild: Guild, logChannelId: string | null | undefined, category: GuardLogCategory, msg: string): Promise<void> {
@@ -129,6 +141,7 @@ function uniqueChannelIds(ids: Array<string | null | undefined>): string[] {
 
 export async function sendGuardLog(guild: Guild, category: GuardLogCategory, msg: string): Promise<void> {
   const cfg = await getGuard(guild.id);
+  if (!cfg.logsEnabled) return;
   const specific = category === "ban"
     ? cfg.banLogChannelId
     : category === "mute"
@@ -139,15 +152,20 @@ export async function sendGuardLog(guild: Guild, category: GuardLogCategory, msg
           ? cfg.deletedMessageLogChannelId
           : category === "general"
             ? cfg.generalLogChannelId
+          : category === "protection"
+            ? cfg.protectionLogChannelId
+            : category === "member"
+              ? cfg.memberLogChannelId
             : cfg.logChannelId;
-  const ids = category === "general"
-    ? uniqueChannelIds([cfg.generalLogChannelId])
+  const ids = category === "general" || category === "protection" || category === "member"
+    ? uniqueChannelIds([specific])
     : uniqueChannelIds([specific, cfg.generalLogChannelId]);
   await Promise.all(ids.map((id) => sendLogToChannel(guild, id, category, msg)));
 }
 
 async function sendLog(guild: Guild, logChannelId: string | null | undefined, msg: string): Promise<void> {
   const cfg = await getGuard(guild.id);
+  if (!cfg.logsEnabled) return;
   const ids = uniqueChannelIds([logChannelId, cfg.generalLogChannelId]);
   await Promise.all(ids.map((id) => sendLogToChannel(guild, id, "guard", msg)));
 }
@@ -230,6 +248,20 @@ export async function handleMessageLog(
 
 export async function handleBulkMessageLog(guild: Guild, channelId: string, count: number): Promise<void> {
   await sendGuardLog(guild, "deletedMessage", `**Toplu mesaj silindi**\n**Kanal:** <#${channelId}>\n**Mesaj sayısı:** ${count}`);
+}
+
+export async function handleMemberLog(
+  guild: Guild,
+  member: GuildMember | PartialGuildMember,
+  event: "join" | "leave",
+): Promise<void> {
+  await sendGuardLog(
+    guild,
+    "member",
+    `${event === "join" ? "📥 Sunucuya giriş" : "📤 Sunucudan çıkış"}\n` +
+      `**Kullanıcı:** <@${member.user.id}> (\`${member.user.id}\`)\n` +
+      `**Hesap oluşturulma:** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+  );
 }
 
 // ── Spam: in-memory hız limiti ───────────────────────────────────────────────

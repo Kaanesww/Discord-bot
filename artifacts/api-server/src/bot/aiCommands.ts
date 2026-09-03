@@ -20,6 +20,7 @@ import { isOwner } from "./ownerUtils";
 import { setPrefix as setPrefixUtil } from "./guildSettings";
 import { generateWarnCard } from "./warnCard";
 import { logger } from "../lib/logger";
+import { sendMessageChannel } from "./types";
 
 // ── Gemini Araç Tanımları ─────────────────────────────────────────────────────
 
@@ -359,7 +360,7 @@ export async function executeToolCall(
 
         // Kanala gönder
         if (warnBuf) {
-          await message.channel.send({
+          await sendMessageChannel(message, {
             files: [new AttachmentBuilder(warnBuf, { name: "warn.png" })],
           }).catch(() => null);
         }

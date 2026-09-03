@@ -4,6 +4,7 @@
  * Bot sahibi belirli komutları bakıma alabilir.
  * Bakımdaki komutlar tüm sunucularda çalışmaz.
  */
+import { isBotAdminCached } from "./botAdmin";
 
 export interface MaintenanceEntry {
   command: string;
@@ -25,8 +26,12 @@ export function getBotOwner(): string | null {
   return botOwnerId;
 }
 
-export function isOwner(userId: string): boolean {
+export function isBotOwner(userId: string): boolean {
   return botOwnerId !== null && userId === botOwnerId;
+}
+
+export function isOwner(userId: string): boolean {
+  return isBotOwner(userId) || isBotAdminCached(userId);
 }
 
 export function isInMaintenance(command: string): boolean {

@@ -32,6 +32,15 @@ import {
   addMaintenance, removeMaintenance, clearAllMaintenance,
   getMaintenanceList, getBotOwner,
 } from "./maintenance";
+import { isBotOwner } from "./maintenance";
+import {
+  ensureBotAdminSchema, refreshBotAdminCache, getBotAdminState,
+  setBotAdminEnabled, addBotAdmin, removeBotAdmin,
+} from "./botAdmin";
+import {
+  ensureAutoLogChannels, disableAutoLogs,
+  getLogStatus, buildUserActivityEmbeds,
+} from "./logManager";
 import { generateMaintenanceCard } from "./maintenanceCard";
 import { logAction, getUserLogs, deactivateLog, getLogById } from "./moderation";
 import {
@@ -47,8 +56,14 @@ import { generateGiveawayCard } from "./giveawayCard";
 import {
   getGuard, setGuard, ensureGuardSchema, handleSpam, handleLink, handleEmoji,
   handleBotJoin, handleRoleUpdate, handleChannelChange, handleAuditLogEntry,
-  handleMessageLog, handleBulkMessageLog,
+  handleMessageLog, handleBulkMessageLog, handleMemberLog,
 } from "./guard";
+import {
+  ensureServerProtectionSchema, getProtection, createProtectionSetup,
+  toggleProtectionSetup, saveProtectionSetup, setProtectionEnabled,
+  lockServer, clearProtection, disableProtection, checkProtectionTrigger,
+  protectionSetupEmbed, type ProtectionSetupDraft,
+} from "./serverProtection";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
 import { canUseMod, getModSettings, setModEnabled, setModLogChannel, addRoleForCmd, removeRoleForCmd, isModEnabled, getModTierInfo, setModRoles, setSeniorModRoles, setApprovalChannel, canApproveMod, type ModCommand } from "./moderationSettings";
 import { handleApprovalButton, sendApprovalRequest, type PendingRequest } from "./approvalSystem";
@@ -105,6 +120,7 @@ type AnonymousSetupSession = {
   categoryId?: string;
 };
 const anonymousSetupSessions = new Map<string, AnonymousSetupSession>();
+const protectionSetupSessions = new Map<string, ProtectionSetupDraft>();
 
 // ── Sunucu Kur yapısı ─────────────────────────────────────────────────────────
 
@@ -296,10 +312,20 @@ async function pfxSicil(m: Message): Promise<void> {
 // ── Mod log helper ─────────────────────────────────────────────────────────────
 async function sendModLog(m: Message, guildId: string, text: string): Promise<void> {
   try {
+    const guard = await getGuard(guildId);
+    if (!guard.logsEnabled) return;
     const s = await getModSettings(guildId);
     if (!s?.logChannelId) return;
     const ch = await m.guild?.channels.fetch(s.logChannelId).catch(() => null);
-    if (ch?.isTextBased()) await (ch as TextChannel).send(text);
+    if (ch?.isTextBased()) {
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle("🛡️ Moderasyon İşlemi")
+        .setDescription(text.slice(0, 4000))
+        .setFooter({ text: m.guild?.name ?? "Moderasyon" })
+        .setTimestamp();
+      await (ch as TextChannel).send({ embeds: [embed] });
+    }
   } catch { /**/ }
 }
 
@@ -2872,7 +2898,281 @@ const EXTERNAL_APP_PERMISSIONS = [
 ];
 
 function isGuildOwner(m: Message): boolean {
-  return Boolean(m.guild && m.author.id === m.guild.ownerId);
+  return Boolean(m.guild && (m.author.id === m.guild.ownerId || isOwner(m.author.id)));
+}
+
+async function pfxLoglar(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+  if (!isGuildOwner(m)) {
+    await m.reply("❌ Bu komutu yalnızca sunucu sahibi veya aktif bot admini kullanabilir.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+  if (!sub || ["durum", "status"].includes(sub)) {
+    const status = await getLogStatus(m.guildId);
+    const channel = (id: string | null) => id ? `<#${id}>` : "Ayarlanmamış";
+    const embed = new EmbedBuilder()
+      .setColor(status.enabled ? 0x57f287 : 0xed4245)
+      .setTitle("📋 Sunucu Log Sistemi")
+      .setDescription(status.enabled
+        ? "Log sistemi açık. Bot, işlemleri aşağıdaki kanallara embed olarak gönderiyor."
+        : "Log sistemi kapalı. Log kanalları silinmedi; tekrar açıldığında kullanılabilir.")
+      .addFields(
+        { name: "Durum", value: status.enabled ? "🟢 Açık" : "🔴 Kapalı", inline: true },
+        { name: "Genel", value: channel(status.channels.general), inline: true },
+        { name: "Ban", value: channel(status.channels.ban), inline: true },
+        { name: "Mute / Timeout", value: channel(status.channels.mute), inline: true },
+        { name: "Mesaj", value: channel(status.channels.message), inline: true },
+        { name: "Silinen Mesaj", value: channel(status.channels.deletedMessage), inline: true },
+        { name: "Koruma", value: channel(status.channels.protection), inline: true },
+        { name: "Giriş / Çıkış", value: channel(status.channels.member), inline: true },
+      )
+      .setFooter({ text: "Açmak için: v!loglar aç • Kapatmak için: v!loglar kapat" })
+      .setTimestamp();
+    await m.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (["aç", "ac", "on", "enable"].includes(sub)) {
+    try {
+      const ids = await ensureAutoLogChannels(m.guild);
+      const embed = new EmbedBuilder()
+        .setColor(0x57f287)
+        .setTitle("✅ Log Sistemi Açıldı")
+        .setDescription("Log kategorisi ve eksik kanallar bot tarafından oluşturuldu. Tüm kayıtlar embed olarak gönderilecek.")
+        .addFields(
+          { name: "Genel", value: `<#${ids.generalLogChannelId}>`, inline: true },
+          { name: "Ban", value: `<#${ids.banLogChannelId}>`, inline: true },
+          { name: "Mute", value: `<#${ids.muteLogChannelId}>`, inline: true },
+          { name: "Mesaj", value: `<#${ids.messageLogChannelId}>`, inline: true },
+          { name: "Silinen Mesaj", value: `<#${ids.deletedMessageLogChannelId}>`, inline: true },
+          { name: "Koruma", value: `<#${ids.protectionLogChannelId}>`, inline: true },
+          { name: "Giriş / Çıkış", value: `<#${ids.memberLogChannelId}>`, inline: true },
+        )
+        .setTimestamp();
+      await m.reply({ embeds: [embed] });
+    } catch (err) {
+      logger.error({ err, guildId: m.guildId }, "Otomatik log kanalları oluşturulamadı");
+      await m.reply("❌ Log kanalları oluşturulamadı. Botun **Manage Channels**, **View Channel**, **Send Messages** ve **Embed Links** izinlerini kontrol et.");
+    }
+    return;
+  }
+
+  if (["kapat", "off", "disable"].includes(sub)) {
+    await disableAutoLogs(m.guildId);
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle("🔴 Log Sistemi Kapatıldı")
+        .setDescription("Yeni log mesajları gönderilmeyecek. Oluşturulan log kanalları korunuyor.")
+        .setTimestamp()],
+    });
+    return;
+  }
+
+  const activityRequested = ["kullanıcı", "kullanici", "user", "islem", "işlem", "aktivite", "audit"].includes(sub)
+    || /^\d{15,20}$/.test(sub);
+  if (activityRequested) {
+    const userId = m.mentions.users.first()?.id
+      ?? args.find((arg) => /^\d{15,20}$/.test(arg));
+    if (!userId) {
+      await m.reply("❌ Kullanım: `loglar kullanıcı <Discord ID>`");
+      return;
+    }
+    await m.reply({ embeds: await buildUserActivityEmbeds(m, userId) });
+    return;
+  }
+
+  await m.reply("❌ Kullanım: `loglar aç` | `loglar kapat` | `loglar durum` | `loglar kullanıcı <Discord ID>`");
+}
+
+async function pfxBotAdmin(m: Message, args: string[]): Promise<void> {
+  if (!isBotOwner(m.author.id)) {
+    await m.reply("❌ Bu komutu yalnızca bot sahibi kullanabilir.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+  if (!sub || ["durum", "status", "liste", "list"].includes(sub)) {
+    const state = await getBotAdminState();
+    const ids = state.adminIds.length
+      ? state.adminIds.map((id, index) => `${index + 1}. <@${id}> — \`${id}\``).join("\n")
+      : "Henüz bot admini eklenmemiş.";
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(state.enabled ? 0x57f287 : 0xed4245)
+        .setTitle("👑 Bot Admin Sistemi")
+        .setDescription(`Durum: **${state.enabled ? "Açık" : "Kapalı"}**\n\n${ids}`)
+        .setFooter({ text: "Bot adminler açıkken komut izinlerini atlar." })
+        .setTimestamp()],
+    });
+    return;
+  }
+
+  if (["aç", "ac", "on", "enable"].includes(sub)) {
+    await setBotAdminEnabled(true);
+    await m.reply("✅ Bot admin sistemi açıldı. Listedeki kullanıcılar tüm komutları izinlerden bağımsız kullanabilir.");
+    return;
+  }
+  if (["kapat", "off", "disable"].includes(sub)) {
+    await setBotAdminEnabled(false);
+    await m.reply("🔴 Bot admin sistemi kapatıldı. Listedeki ayrıcalıklar artık geçerli değil.");
+    return;
+  }
+
+  if (["ekle", "add"].includes(sub) || ["çıkar", "cikar", "kaldır", "kaldir", "remove"].includes(sub)) {
+    const userId = m.mentions.users.first()?.id
+      ?? args.slice(1).find((arg) => /^\d{15,20}$/.test(arg));
+    if (!userId) {
+      await m.reply("❌ Kullanım: `botadmin ekle <Discord ID>` veya `botadmin çıkar <Discord ID>`");
+      return;
+    }
+    const added = ["ekle", "add"].includes(sub)
+      ? await addBotAdmin(userId)
+      : await removeBotAdmin(userId);
+    await m.reply(added
+      ? `✅ \`${userId}\` bot admin listesinde güncellendi.`
+      : `ℹ️ \`${userId}\` için değişiklik yapılmadı; kullanıcı zaten mevcut durumda.`);
+    return;
+  }
+
+  await m.reply("❌ Kullanım: `botadmin aç/kapat` | `botadmin ekle <ID>` | `botadmin çıkar <ID>` | `botadmin liste`");
+}
+
+function protectionSetupRows(draft: ProtectionSetupDraft) {
+  const button = (condition: "join" | "leave" | "channel" | "role", label: string, enabled: boolean) =>
+    new ButtonBuilder()
+      .setCustomId(`protection_setup_toggle:${draft.guildId}:${draft.userId}:${condition}`)
+      .setLabel(`${enabled ? "✅" : "⬜"} ${label}`)
+      .setStyle(enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      button("join", "Toplu giriş", draft.joinEnabled),
+      button("leave", "Toplu çıkış", draft.leaveEnabled),
+      button("channel", "Kanal değişikliği", draft.channelEnabled),
+      button("role", "Rol değişikliği", draft.roleEnabled),
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`protection_setup_save:${draft.guildId}:${draft.userId}`)
+        .setLabel("✅ Kurulumu Kaydet")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`protection_setup_cancel:${draft.guildId}:${draft.userId}`)
+        .setLabel("İptal")
+        .setStyle(ButtonStyle.Danger),
+    ),
+  ];
+}
+
+function setupNumber(args: string[], names: string[], fallback: number): number {
+  for (const name of names) {
+    const index = args.findIndex((arg) => arg.toLowerCase() === name);
+    const value = index >= 0 ? Number(args[index + 1]) : NaN;
+    if (Number.isInteger(value) && value > 0) return value;
+  }
+  return fallback;
+}
+
+async function pfxKoruma(m: Message, args: string[]): Promise<void> {
+  if (!m.guild || !m.guildId) return;
+  if (!isGuildOwner(m)) {
+    await m.reply("❌ Sunucu korumasını yalnızca sunucu sahibi veya aktif bot admini yönetebilir.");
+    return;
+  }
+
+  const sub = args[0]?.toLowerCase();
+  const config = await getProtection(m.guildId);
+
+  if (!sub || ["durum", "status"].includes(sub)) {
+    const state = config.locked ? "🔒 Kilitli" : config.enabled ? "🟢 İzlemede" : "🔴 Kapalı";
+    const on = (value: boolean) => value ? "Açık" : "Kapalı";
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(config.locked ? 0xed4245 : config.enabled ? 0x57f287 : 0x72767d)
+        .setTitle("🛡️ Sunucu Koruması")
+        .setDescription(`Durum: **${state}**${config.lockReason ? `\nNeden: ${config.lockReason}` : ""}`)
+        .addFields(
+          { name: "Toplu giriş", value: `${on(config.joinEnabled)} — ${config.joinThreshold} kişi / ${config.windowSeconds} sn`, inline: true },
+          { name: "Toplu çıkış", value: `${on(config.leaveEnabled)} — ${config.leaveThreshold} kişi / ${config.windowSeconds} sn`, inline: true },
+          { name: "Kanal değişikliği", value: `${on(config.channelEnabled)} — ${config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
+          { name: "Rol değişikliği", value: `${on(config.roleEnabled)} — ${config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
+          { name: "Bilgi kanalı", value: config.infoChannelId ? `<#${config.infoChannelId}>` : "Kilitlenince oluşturulacak", inline: true },
+        )
+        .setFooter({ text: "Kurulum: v!koruma setup • Temizleme: v!koruma temizle" })
+        .setTimestamp()],
+    });
+    return;
+  }
+
+  if (["setup", "kur", "kurulum"].includes(sub)) {
+    const draft = createProtectionSetup(m.guildId, m.author.id, config);
+    draft.joinThreshold = setupNumber(args, ["giriş", "giris", "join"], draft.joinThreshold);
+    draft.leaveThreshold = setupNumber(args, ["çıkış", "cikis", "leave"], draft.leaveThreshold);
+    draft.changeThreshold = setupNumber(args, ["değişiklik", "degisiklik", "change"], draft.changeThreshold);
+    draft.windowSeconds = setupNumber(args, ["süre", "sure", "saniye", "window"], draft.windowSeconds);
+    protectionSetupSessions.set(`${m.guildId}:${m.author.id}`, draft);
+    await m.reply({ embeds: [protectionSetupEmbed(draft)], components: protectionSetupRows(draft) });
+    return;
+  }
+
+  if (["aç", "ac", "on", "enable"].includes(sub)) {
+    await setProtectionEnabled(m.guildId, true);
+    await m.reply("✅ Sunucu koruması açıldı. Ayarları değiştirmek için `v!koruma setup` kullan.");
+    return;
+  }
+
+  if (["kapat", "off", "disable"].includes(sub)) {
+    if (config.locked) {
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`server_protection_disable:${m.guildId}:${m.author.id}`)
+          .setLabel("Kilidi Kaldır ve Korumayı Kapat")
+          .setStyle(ButtonStyle.Danger),
+      );
+      await m.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xffc857)
+          .setTitle("⚠️ Koruma Kapatma Onayı")
+          .setDescription("Bu işlem kanalları ve kaydedilen rolleri geri yükleyerek korumayı kapatır. Onaylamak için butona bas.")],
+        components: [row],
+      });
+    } else {
+      await setProtectionEnabled(m.guildId, false);
+      await m.reply("🔴 Sunucu koruması kapatıldı.");
+    }
+    return;
+  }
+
+  if (["temizle", "clear", "açık", "acik", "unlock", "kilitkaldır", "kilitkaldir"].includes(sub)) {
+    if (!config.locked) {
+      await m.reply("ℹ️ Sunucu şu anda kilitli değil.");
+      return;
+    }
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`server_protection_clear:${m.guildId}:${m.author.id}`)
+        .setLabel("Korumayı Temizle ve Sunucuyu Aç")
+        .setStyle(ButtonStyle.Success),
+    );
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xffc857)
+        .setTitle("⚠️ Sunucu Koruması Temizleme Onayı")
+        .setDescription("Kayıtlı kanal izinleri ve kullanıcı rolleri geri yüklenecek. Devam etmek için butona bas.")],
+      components: [row],
+    });
+    return;
+  }
+
+  if (["kilitle", "lock"].includes(sub)) {
+    const locked = await lockServer(m.guild, "Sunucu sahibi tarafından manuel kilitleme");
+    await m.reply(locked ? "🔒 Sunucu kilitlendi. Bilgilendirme kanalı oluşturuldu." : "ℹ️ Koruma zaten kilitli veya aktif değil.");
+    return;
+  }
+
+  await m.reply("❌ Kullanım: `koruma setup` | `koruma durum` | `koruma aç/kapat` | `koruma temizle`");
 }
 
 async function setExternalAppProtection(m: Message, blocked: boolean): Promise<void> {
@@ -2919,6 +3219,7 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
         { name: "💬 Mesaj Logu", value: cfg.messageLogChannelId ? `<#${cfg.messageLogChannelId}>` : "Ayarlanmamış", inline: true },
         { name: "🗑️ Silinen Mesaj Logu", value: cfg.deletedMessageLogChannelId ? `<#${cfg.deletedMessageLogChannelId}>` : "Ayarlanmamış", inline: true },
         { name: "🧾 Genel İşlem Logu", value: cfg.generalLogChannelId ? `<#${cfg.generalLogChannelId}>` : "Ayarlanmamış", inline: true },
+        { name: "📋 Otomatik Log Sistemi", value: cfg.logsEnabled ? "🟢 Açık" : "🔴 Kapalı", inline: true },
       )
       .setFooter({ text: "Detaylı kullanım: v!guard yardım" })
       .setTimestamp();
@@ -2940,6 +3241,7 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
         .addFields(
           { name: "Modül aç/kapat", value: "`guard spam aç/kapat eşik 5`\n`guard spam aç/kapat aksiyon warn`\n`guard link aç/kapat aksiyon delete`\n`guard bot aç/kapat aksiyon kick|ban`\n`guard emoji aç/kapat max 5 aksiyon delete`\n`guard rol aç/kapat`\n`guard kanal aç/kapat`" },
           { name: "Log kanalları", value: "`guard log #kanal` — eski Guard logu + genel log\n`guard log ban #kanal`\n`guard log mute #kanal`\n`guard log mesaj #kanal`\n`guard log silinen #kanal`\n`guard log genel #kanal`\nAyrıca: `guard banlog #kanal`, `guard mutelog #kanal`, `guard mesajlog #kanal`, `guard silinenlog #kanal`, `guard genellog #kanal`" },
+          { name: "Otomatik log sistemi", value: "`loglar aç` — kategori ve kanalları otomatik oluşturur\n`loglar kapat` — mesaj gönderimini durdurur\n`loglar durum` — kanalları ve durumu gösterir\n`loglar kullanıcı <Discord ID>` — kullanıcının işlemlerini gösterir" },
           { name: "Link", value: "`guard link whitelist ekle example.com`\n`guard link whitelist kaldir example.com`" },
           { name: "Entegrasyon engeli", value: "`guard entegrasyon durum`\n`guard entegrasyon kapat`\n`guard entegrasyon aç`" },
         )
@@ -3585,6 +3887,9 @@ const prefixHandlers: Record<string, PfxHandler> = {
   etiketrol: pfxTagRol,
   // Sicil
   sicil: (m) => pfxSicil(m),
+  loglar: pfxLoglar, logs: pfxLoglar, log: pfxLoglar,
+  botadmin: pfxBotAdmin, "bot-admin": pfxBotAdmin,
+  koruma: pfxKoruma, sunucukoruma: pfxKoruma, serverprotection: pfxKoruma,
   // Moderasyon
   ban: pfxBan,
   idban: pfxIdBan, banid: pfxIdBan,
@@ -3683,49 +3988,6 @@ const prefixHandlers: Record<string, PfxHandler> = {
     if (handler) await handler(m, args);
   },
 
-  // Kod yazma kanalı (sadece bot sahibi)
-  kodkanal: async (m, args) => {
-    if (!isOwner(m.author.id)) {
-      await m.reply("❌ Bu komutu sadece **bot sahibi** kullanabilir."); return;
-    }
-    const sub = args[0]?.toLowerCase();
-
-    if (!sub || sub === "durum" || sub === "status") {
-      const id = await getCodeChannelId();
-      await m.reply(id
-        ? `🖥️ **Kod yazma kanalı:** <#${id}>\nDeğiştirmek için: \`kodkanal #yeni-kanal\`\nKaldırmak için: \`kodkanal kaldır\``
-        : "❌ Henüz bir kod yazma kanalı belirlenmemiş.\nKurmak için: \`kodkanal #kanal-adı\`"
-      ); return;
-    }
-
-    if (sub === "kaldır" || sub === "kaldir" || sub === "sil" || sub === "kapat") {
-      await clearCodeChannelId();
-      await m.reply("✅ Kod yazma kanalı kaldırıldı."); return;
-    }
-
-    // Kanal mention veya ID
-    const channelId = m.mentions.channels.first()?.id ?? (args[0]?.match(/\d{15,20}/)?.[0]);
-    if (!channelId) {
-      await m.reply(
-        "❌ Kullanım: `kodkanal #kanal` | `kodkanal kaldır` | `kodkanal durum`\n" +
-        "Örnek: `kodkanal #vbri-dev`"
-      ); return;
-    }
-    const ch = await m.guild?.channels.fetch(channelId).catch(() => null);
-    if (!ch || !ch.isTextBased()) {
-      await m.reply("❌ Geçerli bir metin kanalı belirt."); return;
-    }
-    await setCodeChannelId(channelId);
-    await m.reply(
-      `✅ **Kod yazma kanalı** <#${channelId}> olarak ayarlandı!\n\n` +
-      `📝 O kanalda ne istediğini Türkçe/İngilizce yaz:\n` +
-      `> "Her kullanıcıya günde bir kez v!maden komutu ekle, 50-200 coin kazansın"\n\n` +
-      `⚡ VBRİ kodu üretir, ✅ ile onaylarsan bota uygular.\n` +
-      `⚙️ Not: Gemini kotası doluysa biraz beklenmesi gerekebilir.`
-    );
-  },
-  codekanal: async (m, a) => { const h = prefixHandlers["kodkanal"]; if (h) await h(m, a); },
-
   // Oyunlar
   rps: pfxRps, tkm: pfxRps,
   mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
@@ -3761,7 +4023,7 @@ const prefixHandlers: Record<string, PfxHandler> = {
   // Çekiliş
   "çekiliş": pfxCekilis, cekilis: pfxCekilis, giveaway: pfxCekilis, cekilish: pfxCekilis,
   // Guard
-  guard: pfxGuard, koruma: pfxGuard,
+  guard: pfxGuard,
   entegrasyon: pfxEntegrasyon, entegrasyonlar: pfxEntegrasyon, uygulamaengel: pfxEntegrasyon,
   // Moderasyon ayarları
   modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
@@ -3946,6 +4208,10 @@ export async function startBot(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     await ensureGuardSchema().catch((err) => logger.error({ err }, "Guard veritabanı şeması hazırlanamadı"));
+    await ensureBotAdminSchema()
+      .then(() => refreshBotAdminCache())
+      .catch((err) => logger.error({ err }, "Bot admin veritabanı şeması hazırlanamadı"));
+    await ensureServerProtectionSchema().catch((err) => logger.error({ err }, "Sunucu koruması veritabanı şeması hazırlanamadı"));
     await ensureAnonymousSchema().catch((err) => logger.error({ err }, "Anonim veritabanı şeması hazırlanamadı"));
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
 
@@ -4129,6 +4395,88 @@ export async function startBot(): Promise<void> {
     }
     if (!interaction.isButton()) return;
     const { customId } = interaction;
+
+    if (customId.startsWith("protection_setup_")) {
+      const parts = customId.split(":");
+      const action = parts[0];
+      const guildId = parts[1];
+      const userId = parts[2];
+      const key = `${guildId}:${userId}`;
+      if (!interaction.guildId || interaction.guildId !== guildId || interaction.user.id !== userId) {
+        await interaction.reply({ content: "❌ Bu kurulum paneli yalnızca kurulumu başlatan kişiye aittir.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const draft = protectionSetupSessions.get(key);
+      if (!draft) {
+        await interaction.reply({ content: "❌ Bu kurulum panelinin süresi doldu. `v!koruma setup` ile yeniden başlat.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      if (action === "protection_setup_toggle") {
+        const condition = parts[3] as "join" | "leave" | "channel" | "role";
+        if (!["join", "leave", "channel", "role"].includes(condition)) return;
+        const next = toggleProtectionSetup(draft, condition);
+        protectionSetupSessions.set(key, next);
+        await interaction.update({ embeds: [protectionSetupEmbed(next)], components: protectionSetupRows(next) }).catch(() => null);
+        return;
+      }
+      if (action === "protection_setup_save") {
+        await saveProtectionSetup(draft);
+        protectionSetupSessions.delete(key);
+        await interaction.update({
+          embeds: [new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle("✅ Sunucu Koruması Kuruldu")
+            .setDescription("Seçtiğin koşullar kaydedildi ve koruma izleme moduna alındı.\nTetiklenirse bot snapshot alıp sunucuyu otomatik kilitleyecek.")
+            .setTimestamp()],
+          components: [],
+        }).catch(() => null);
+        return;
+      }
+      if (action === "protection_setup_cancel") {
+        protectionSetupSessions.delete(key);
+        await interaction.update({ content: "❌ Sunucu koruması kurulumu iptal edildi.", embeds: [], components: [] }).catch(() => null);
+        return;
+      }
+    }
+
+    if (customId.startsWith("server_protection_clear:") || customId.startsWith("server_protection_disable:")) {
+      const [action, guildId, requesterId] = customId.split(":");
+      const guild = interaction.guild;
+      const authorized = Boolean(
+        guild &&
+        interaction.guildId === guildId &&
+        (interaction.user.id === requesterId || interaction.user.id === guild.ownerId || isOwner(interaction.user.id)),
+      );
+      if (!authorized || !guild) {
+        await interaction.reply({ content: "❌ Bu işlem yalnızca sunucu sahibi veya aktif bot admini tarafından onaylanabilir.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.deferUpdate().catch(() => null);
+      if (action === "server_protection_disable") {
+        await disableProtection(guild);
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setColor(0xed4245)
+            .setTitle("🔓 Koruma Kapatıldı")
+            .setDescription("Sunucu açıldı ve sunucu koruması devre dışı bırakıldı.")
+            .setTimestamp()],
+          components: [],
+        }).catch(() => null);
+      } else {
+        const restored = await clearProtection(guild);
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setColor(restored ? 0x57f287 : 0x72767d)
+            .setTitle(restored ? "🔓 Sunucu Açıldı" : "ℹ️ Sunucu Zaten Açık")
+            .setDescription(restored
+              ? "Koruma temizlendi; kaydedilen kanal izinleri ve kullanıcı rolleri geri yüklendi."
+              : "Aktif bir sunucu kilidi bulunamadı.")
+            .setTimestamp()],
+          components: [],
+        }).catch(() => null);
+      }
+      return;
+    }
 
     // Anonim profil onay/red butonları DM'den gelir.
     if (customId.startsWith("anon_setup_start:")) {
@@ -4332,8 +4680,15 @@ export async function startBot(): Promise<void> {
   // ── Guard: Bot katılım koruması ───────────────────────────────────────────
   client.on(Events.GuildMemberAdd, async (member: GuildMember) => {
     await handleBotJoin(member).catch(() => null);
+    await handleMemberLog(member.guild, member, "join").catch(() => null);
+    await checkProtectionTrigger(member.guild, "join").catch((err) => logger.debug({ err }, "Giriş koruması kontrolü başarısız"));
     await syncMemberTagRole(member).catch(() => null);
     await applyAutoRoles(member).catch(() => null);
+  });
+
+  client.on(Events.GuildMemberRemove, async (member) => {
+    await handleMemberLog(member.guild, member, "leave").catch(() => null);
+    await checkProtectionTrigger(member.guild, "leave").catch((err) => logger.debug({ err }, "Çıkış koruması kontrolü başarısız"));
   });
 
   client.on(Events.GuildMemberUpdate, async (_oldMember, newMember) => {
@@ -4359,6 +4714,15 @@ export async function startBot(): Promise<void> {
       entry.action === AuditLogEvent.ChannelUpdate
     ) {
       await handleChannelChange(guild, entry).catch(() => null);
+      await checkProtectionTrigger(guild, "channel").catch((err) => logger.debug({ err }, "Kanal koruması kontrolü başarısız"));
+    }
+    if (
+      entry.action === AuditLogEvent.MemberRoleUpdate ||
+      entry.action === AuditLogEvent.RoleCreate ||
+      entry.action === AuditLogEvent.RoleDelete ||
+      entry.action === AuditLogEvent.RoleUpdate
+    ) {
+      await checkProtectionTrigger(guild, "role").catch((err) => logger.debug({ err }, "Rol koruması kontrolü başarısız"));
     }
   });
 
@@ -4585,19 +4949,6 @@ export async function startBot(): Promise<void> {
         logger.error({ err }, "VBRIaimotor sohbet hatası")
       );
       return; // Guard ve XP'yi atla — sadece AI yanıtı ver
-    }
-
-    // ── Kod yazma kanalı ────────────────────────────────────────────────────
-    const codeChannelId = await getCodeChannelId().catch(() => null);
-    if (codeChannelId && message.channelId === codeChannelId) {
-      if (!isOwner(message.author.id)) {
-        await message.reply("❌ Bu kanalı sadece **bot sahibi** kullanabilir.").catch(() => null);
-        return;
-      }
-      await handleCodeMessage(message, client).catch((err) =>
-        logger.error({ err }, "Kod motoru hatası")
-      );
-      return;
     }
 
     const prefix = await getPrefix(message.guildId).catch(() => "v!");
