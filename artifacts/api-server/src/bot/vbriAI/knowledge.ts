@@ -13,7 +13,7 @@ export interface CommandInfo {
   note?: string;
 }
 
-export const COMMANDS: CommandInfo[] = [
+const ALL_COMMANDS: CommandInfo[] = [
   // ── SEVİYE / PROFİL ────────────────────────────────────────────────────────
   {
     names: ["level", "seviye", "rank", "profil", "profile", "lvl"],
@@ -395,6 +395,15 @@ export const COMMANDS: CommandInfo[] = [
       "Gemini kotası doluysa biraz beklemek gerekebilir.",
   },
 ];
+
+// Ürün kapsamından çıkarılan komutlar AI yardımında da önerilmemeli.
+export const COMMANDS: CommandInfo[] = ALL_COMMANDS.filter((command) =>
+  !["Seviye", "Ekonomi", "Oyunlar"].includes(command.category) &&
+  !command.names.includes("stat") &&
+  !command.names.includes("otorol") &&
+  !command.names.includes("çekiliş") &&
+  !command.names.includes("cekilis"),
+);
 
 // ── Komut arama ────────────────────────────────────────────────────────────────
 

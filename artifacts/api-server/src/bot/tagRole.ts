@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Guild, GuildMember, User } from "discord.js";
-import { db, tagRoleSettingsTable, type TagRoleSettings } from "@workspace/db";
+import { db, pool, tagRoleSettingsTable, type TagRoleSettings } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 type PrimaryGuildInfo = {
@@ -14,6 +14,17 @@ type TagRoleSyncResult = {
   removed: number;
   skipped: number;
 };
+
+export async function ensureTagRoleSchema(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tag_role_settings (
+      guild_id TEXT PRIMARY KEY,
+      tag TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
 
 function getPrimaryGuild(user: User): PrimaryGuildInfo | null {
   const primaryGuild = (user as User & { primaryGuild?: PrimaryGuildInfo | null }).primaryGuild;

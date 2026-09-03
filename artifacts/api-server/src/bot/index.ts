@@ -3,6 +3,7 @@ import {
   AttachmentBuilder, TextChannel, ChannelType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ChannelSelectMenuBuilder,
+  UserSelectMenuBuilder,
   PermissionFlagsBits, PermissionsBitField, EmbedBuilder,
   Partials,
   type ColorResolvable,
@@ -62,6 +63,7 @@ import {
   ensureServerProtectionSchema, getProtection, createProtectionSetup,
   toggleProtectionSetup, saveProtectionSetup, setProtectionEnabled,
   lockServer, clearProtection, disableProtection, checkProtectionTrigger,
+  manuallyLockServer,
   protectionSetupEmbed, type ProtectionSetupDraft,
 } from "./serverProtection";
 import { setupStatChannels, updateStatChannels, removeStatChannels, getStatChannels } from "./stat";
@@ -95,6 +97,7 @@ import {
   removeTagRoleSettings,
   syncMemberTagRole,
   syncGuildTagRoles,
+  ensureTagRoleSchema,
   removeManagedRoleFromGuild,
 } from "./tagRole";
 import { getRemoteModChannel, setRemoteModChannel, removeRemoteModChannel } from "./remoteMod";
@@ -3004,8 +3007,34 @@ async function pfxBotAdmin(m: Message, args: string[]): Promise<void> {
         .setColor(state.enabled ? 0x57f287 : 0xed4245)
         .setTitle("👑 Bot Admin Sistemi")
         .setDescription(`Durum: **${state.enabled ? "Açık" : "Kapalı"}**\n\n${ids}`)
-        .setFooter({ text: "Bot adminler açıkken komut izinlerini atlar." })
+        .setFooter({ text: "Aşağıdaki seçim menüleriyle bot admini ekle/kaldır." })
         .setTimestamp()],
+      components: [
+        new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`botadmin_add:${m.author.id}`)
+            .setPlaceholder("Bot admini seç ve ekle")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+        new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`botadmin_remove:${m.author.id}`)
+            .setPlaceholder("Bot adminini seç ve kaldır")
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`botadmin_enable:${m.author.id}`)
+            .setLabel("✅ Sistemi Aç")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`botadmin_disable:${m.author.id}`)
+            .setLabel("🔴 Sistemi Kapat")
+            .setStyle(ButtonStyle.Danger),
+        ),
+      ],
     });
     return;
   }
@@ -3173,6 +3202,96 @@ async function pfxKoruma(m: Message, args: string[]): Promise<void> {
   }
 
   await m.reply("❌ Kullanım: `koruma setup` | `koruma durum` | `koruma aç/kapat` | `koruma temizle`");
+}
+
+// ── MANUEL SUNUCU KAPAT / AÇ ───────────────────────────────────────────────────
+// Bu iki komut otomatik guard ayarından bağımsızdır ve yalnızca gerçek sunucu
+// sahibine açıktır. Bot admini, Administrator ve ManageGuild burada bilerek
+// yeterli değildir.
+function isActualServerOwner(m: Message): boolean {
+  return Boolean(m.guild && m.guild.ownerId === m.author.id);
+}
+
+function manualServerButton(
+  customId: string,
+  label: string,
+  style: ButtonStyle,
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style),
+  );
+}
+
+async function pfxSunucuKapat(m: Message): Promise<void> {
+  if (!m.guild || !isActualServerOwner(m)) {
+    await m.reply("❌ Bu işlem yalnızca sunucu sahibi tarafından yapılabilir.");
+    return;
+  }
+
+  const config = await getProtection(m.guild.id);
+  if (config.locked) {
+    await m.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle("🔒 Sunucu Zaten Kapalı")
+        .setDescription("Sunucu şu anda kilitli. Açmak için `v!sunucuaç` kullan.")],
+      components: [manualServerButton(
+        `manual_server_unlock:${m.guild.id}:${m.author.id}`,
+        "🔓 Sunucuyu Aç",
+        ButtonStyle.Success,
+      )],
+    });
+    return;
+  }
+
+  await m.reply({
+    embeds: [new EmbedBuilder()
+      .setColor(0xffc857)
+      .setTitle("⚠️ Sunucuyu Kapatma Onayı")
+      .setDescription(
+        "Bu işlem tüm kanalları geçici olarak kilitler ve üyelerin rollerini güvenli biçimde saklar. " +
+        "Sunucu sahibi onayladığında `v!sunucuaç` ile eski hâline döndürülebilir.",
+      )
+      .setFooter({ text: "Bu buton yalnızca sunucu sahibinin kullanımına açıktır." })],
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`manual_server_lock:${m.guild.id}:${m.author.id}`)
+          .setLabel("🔒 Sunucuyu Kapat")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`manual_server_cancel:${m.guild.id}:${m.author.id}`)
+          .setLabel("İptal")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  });
+}
+
+async function pfxSunucuAc(m: Message): Promise<void> {
+  if (!m.guild || !isActualServerOwner(m)) {
+    await m.reply("❌ Bu işlem yalnızca sunucu sahibi tarafından yapılabilir.");
+    return;
+  }
+
+  const config = await getProtection(m.guild.id);
+  if (!config.locked) {
+    await m.reply("ℹ️ Sunucu zaten açık.");
+    return;
+  }
+
+  await m.reply({
+    embeds: [new EmbedBuilder()
+      .setColor(0xffc857)
+      .setTitle("⚠️ Sunucuyu Açma Onayı")
+      .setDescription("Kapatma sırasında kaydedilen kanal izinleri ve üye rolleri geri yüklenecek.")
+      .setFooter({ text: "Bu buton yalnızca sunucu sahibinin kullanımına açıktır." })],
+    components: [manualServerButton(
+      `manual_server_unlock:${m.guild.id}:${m.author.id}`,
+      "🔓 Sunucuyu Aç",
+      ButtonStyle.Success,
+    )],
+  });
 }
 
 async function setExternalAppProtection(m: Message, blocked: boolean): Promise<void> {
@@ -3874,15 +3993,6 @@ async function pfxLevelToggle(m: Message, args: string[]): Promise<void> {
 // ── Prefix handler tablosu ────────────────────────────────────────────────────
 
 const prefixHandlers: Record<string, PfxHandler> = {
-  // Level / Profil / Toggle
-  level: (m, a) => a[0] && ["aç","ac","kapat","off","on","enable","disable","durum","status"].includes(a[0].toLowerCase()) ? pfxLevelToggle(m, a) : pfxLevel(m),
-  lvl: (m) => pfxLevel(m), rank: (m) => pfxLevel(m), xp: (m) => pfxLevel(m),
-  profil: (m) => pfxLevel(m), profile: (m) => pfxLevel(m),
-  levelsistemi: pfxLevelToggle, leveltoggle: pfxLevelToggle,
-  // Leaderboard
-  leaderboard: (m) => pfxLeaderboard(m), lb: (m) => pfxLeaderboard(m), top: (m) => pfxLeaderboard(m),
-  // Level rol
-  levelrol: pfxLevelRol,
   tagrol: pfxTagRol,
   etiketrol: pfxTagRol,
   // Sicil
@@ -3904,19 +4014,6 @@ const prefixHandlers: Record<string, PfxHandler> = {
   ac: (m) => pfxAc(m), aç: (m) => pfxAc(m),
   temizle: pfxTemizle, clear: pfxTemizle,
   nuke: (m) => pfxNuke(m),
-  // Ekonomi
-  bakiye: (m) => pfxBakiye(m), balance: (m) => pfxBakiye(m),
-  gunlukodul: (m) => pfxGunlukodul(m), daily: (m) => pfxGunlukodul(m),
-  transfer: pfxTransfer,
-  kumar: pfxKumar, slot: pfxKumar,
-  rulet: pfxRulet, roulette: pfxRulet,
-  coinflip: pfxCoinflip, cf: pfxCoinflip,
-  blackjack: pfxBlackjack, bj: pfxBlackjack,
-  duel: pfxDuel,
-  pray: (m) => pfxPray(m), dua: (m) => pfxPray(m),
-  // Ekonomi Seviye
-  ekono: (m) => pfxEkono(m), ekonomi: (m) => pfxEkono(m), econlevel: (m) => pfxEkono(m), elevel: (m) => pfxEkono(m),
-  ekonlider: (m) => pfxEkonLider(m), elb: (m) => pfxEkonLider(m), econlb: (m) => pfxEkonLider(m),
   // AI sohbet yönetimi
   aitemizle: async (m) => {
     clearChannelHistory(m.channelId);
@@ -3988,12 +4085,6 @@ const prefixHandlers: Record<string, PfxHandler> = {
     if (handler) await handler(m, args);
   },
 
-  // Oyunlar
-  rps: pfxRps, tkm: pfxRps,
-  mine: pfxMine, minesweeper: pfxMine, mayin: pfxMine,
-  patla: (m) => pfxPatla(m),
-  zar: pfxZar, dice: pfxZar,
-  "8top": pfxTop8, top8: pfxTop8,
   // Müzik
   çal: pfxCal, cal: pfxCal, play: pfxCal,
   dur: (m) => pfxDur(m), pause: (m) => pfxDur(m),
@@ -4003,6 +4094,8 @@ const prefixHandlers: Record<string, PfxHandler> = {
   şarkı: (m) => pfxSarki(m), sarki: (m) => pfxSarki(m), np: (m) => pfxSarki(m), nowplaying: (m) => pfxSarki(m),
   // Yönetim
   setprefix: pfxSetPrefix, prefix: pfxSetPrefix,
+  sunucukapat: pfxSunucuKapat, sunucukilitle: pfxSunucuKapat,
+  sunucuaç: pfxSunucuAc, sunucuac: pfxSunucuAc,
   sunucukur: (m) => pfxSunucuKur(m),
   sunucukopyala: pfxSunucuKopyala, skopyala: pfxSunucuKopyala,
   // Rol kopyalama
@@ -4011,8 +4104,6 @@ const prefixHandlers: Record<string, PfxHandler> = {
   sunucuaciklama: (m, a) => pfxSunucuAciklama(m, a),
   sunucuaçıklama: (m, a) => pfxSunucuAciklama(m, a),
   guilddesc: (m, a) => pfxSunucuAciklama(m, a),
-  // Otorol
-  otorol: pfxOtorol, autorol: pfxOtorol, autorole: pfxOtorol,
   // Emoji ekle
   emojiekle: pfxEmojiEkle, emojiadd: pfxEmojiEkle, addEmoji: pfxEmojiEkle,
   // Ses kanalı
@@ -4020,15 +4111,11 @@ const prefixHandlers: Record<string, PfxHandler> = {
   userinfo: (m) => pfxUserinfo(m), kullanicibilgi: (m) => pfxUserinfo(m), uinfo: (m) => pfxUserinfo(m),
   ping: (m) => pfxPing(m),
   yardim: pfxYardim, yardım: pfxYardim, help: pfxYardim,
-  // Çekiliş
-  "çekiliş": pfxCekilis, cekilis: pfxCekilis, giveaway: pfxCekilis, cekilish: pfxCekilis,
   // Guard
   guard: pfxGuard,
   entegrasyon: pfxEntegrasyon, entegrasyonlar: pfxEntegrasyon, uygulamaengel: pfxEntegrasyon,
   // Moderasyon ayarları
   modsetup: pfxModSetup, modayar: pfxModSetup, moderasyon: pfxModSetup,
-  // Stat
-  stat: pfxStat, istatistik: pfxStat, stats: pfxStat,
   // Anonim sohbet
   anon: pfxAnon, anonim: pfxAnon,
   anonpuan: async (m) => pfxAnon(m, ["sıralama"]),
@@ -4212,6 +4299,7 @@ export async function startBot(): Promise<void> {
       .then(() => refreshBotAdminCache())
       .catch((err) => logger.error({ err }, "Bot admin veritabanı şeması hazırlanamadı"));
     await ensureServerProtectionSchema().catch((err) => logger.error({ err }, "Sunucu koruması veritabanı şeması hazırlanamadı"));
+    await ensureTagRoleSchema().catch((err) => logger.error({ err }, "Etiket rolü veritabanı şeması hazırlanamadı"));
     await ensureAnonymousSchema().catch((err) => logger.error({ err }, "Anonim veritabanı şeması hazırlanamadı"));
     logger.info({ tag: c.user.tag }, "Discord botu hazır!");
 
@@ -4393,8 +4481,105 @@ export async function startBot(): Promise<void> {
       }).catch(() => null);
       return;
     }
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith("botadmin_")) {
+      const [action, requesterId] = interaction.customId.split(":");
+      if (!isOwner(interaction.user.id) || requesterId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu bot admin panelini yalnızca bot sahibi kullanabilir.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const selectedId = interaction.values[0];
+      if (!selectedId) {
+        await interaction.reply({ content: "❌ Bir kullanıcı seçmelisin.", ephemeral: true }).catch(() => null);
+        return;
+      }
+
+      if (action === "botadmin_add") {
+        const added = await addBotAdmin(selectedId);
+        await interaction.update({
+          content: added
+            ? `✅ <@${selectedId}> bot admin olarak eklendi.`
+            : `⚠️ <@${selectedId}> zaten bot admin listesinde.`,
+          components: [],
+        }).catch(() => null);
+      } else if (action === "botadmin_remove") {
+        const removed = await removeBotAdmin(selectedId);
+        await interaction.update({
+          content: removed
+            ? `✅ <@${selectedId}> bot admin listesinden kaldırıldı.`
+            : `⚠️ <@${selectedId}> bot admin listesinde değildi.`,
+          components: [],
+        }).catch(() => null);
+      }
+      return;
+    }
     if (!interaction.isButton()) return;
     const { customId } = interaction;
+
+    if (customId.startsWith("botadmin_enable:") || customId.startsWith("botadmin_disable:")) {
+      const [, requesterId] = customId.split(":");
+      if (!isOwner(interaction.user.id) || requesterId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu paneli yalnızca bot sahibi kullanabilir.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      const enabled = customId.startsWith("botadmin_enable:");
+      await setBotAdminEnabled(enabled);
+      await interaction.update({
+        content: `✅ Bot admin sistemi **${enabled ? "açıldı" : "kapatıldı"}**.`,
+        components: [],
+      }).catch(() => null);
+      return;
+    }
+
+    if (customId.startsWith("manual_server_cancel:")) {
+      const [, guildId, ownerId] = customId.split(":");
+      if (!interaction.guild || interaction.guild.id !== guildId ||
+          interaction.guild.ownerId !== interaction.user.id || ownerId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu buton yalnızca sunucu sahibinin kullanımına açıktır.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.update({ content: "✅ Sunucu kapatma işlemi iptal edildi.", embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+
+    if (customId.startsWith("manual_server_lock:")) {
+      const [, guildId, ownerId] = customId.split(":");
+      if (!interaction.guild || interaction.guild.id !== guildId ||
+          interaction.guild.ownerId !== interaction.user.id || ownerId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu buton yalnızca sunucu sahibinin kullanımına açıktır.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.deferUpdate();
+      const locked = await manuallyLockServer(interaction.guild, `Sunucu sahibi ${interaction.user.tag} tarafından manuel olarak kapatıldı.`);
+      await interaction.editReply({
+        content: locked
+          ? "🔒 Sunucu kapatıldı. Açmak için `v!sunucuaç` yazabilir veya aşağıdaki butonu kullanabilirsin."
+          : "ℹ️ Sunucu zaten kapalı veya kapatma işlemi devam ediyor.",
+        embeds: [],
+        components: locked
+          ? [manualServerButton(`manual_server_unlock:${guildId}:${ownerId}`, "🔓 Sunucuyu Aç", ButtonStyle.Success)]
+          : [],
+      }).catch(() => null);
+      return;
+    }
+
+    if (customId.startsWith("manual_server_unlock:")) {
+      const [, guildId, ownerId] = customId.split(":");
+      if (!interaction.guild || interaction.guild.id !== guildId ||
+          interaction.guild.ownerId !== interaction.user.id || ownerId !== interaction.user.id) {
+        await interaction.reply({ content: "❌ Bu buton yalnızca sunucu sahibinin kullanımına açıktır.", ephemeral: true }).catch(() => null);
+        return;
+      }
+      await interaction.deferUpdate();
+      const opened = await clearProtection(interaction.guild);
+      await interaction.editReply({
+        content: opened
+          ? "✅ Sunucu yeniden açıldı; kaydedilen kanal izinleri ve roller geri yüklendi."
+          : "ℹ️ Sunucu zaten açık veya açma işlemi devam ediyor.",
+        embeds: [],
+        components: [],
+      }).catch(() => null);
+      return;
+    }
 
     if (customId.startsWith("protection_setup_")) {
       const parts = customId.split(":");

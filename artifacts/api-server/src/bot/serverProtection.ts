@@ -284,10 +284,14 @@ async function removeMemberRoles(guild: Guild): Promise<void> {
   }
 }
 
-export async function lockServer(guild: Guild, reason: string): Promise<boolean> {
+async function lockServerInternal(
+  guild: Guild,
+  reason: string,
+  requireProtectionEnabled: boolean,
+): Promise<boolean> {
   if (locking.has(guild.id)) return false;
   const config = await getProtection(guild.id);
-  if (!config.enabled || config.locked) return false;
+  if ((requireProtectionEnabled && !config.enabled) || config.locked) return false;
   locking.add(guild.id);
 
   try {
@@ -336,6 +340,16 @@ export async function lockServer(guild: Guild, reason: string): Promise<boolean>
   } finally {
     locking.delete(guild.id);
   }
+}
+
+/** Otomatik guard tetiklemeleri yalnızca koruma açıkken kilitleyebilir. */
+export async function lockServer(guild: Guild, reason: string): Promise<boolean> {
+  return lockServerInternal(guild, reason, true);
+}
+
+/** Sunucu sahibi tarafından başlatılan manuel kilitleme koruma ayarından bağımsızdır. */
+export async function manuallyLockServer(guild: Guild, reason: string): Promise<boolean> {
+  return lockServerInternal(guild, reason, false);
 }
 
 export async function clearProtection(guild: Guild): Promise<boolean> {

@@ -10,23 +10,6 @@ import { logger } from "../lib/logger";
 
 // ── Komut açıklamaları (niyet tespiti için) ───────────────────────────────────
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
-  ekono:      "kullanıcının para/bakiye/coin durumunu göster",
-  daily:      "günlük ödül al, günlük bonus",
-  pray:       "ibadet et, dua et, coin kazan",
-  coinflip:   "yazı tura, coin flip, şans oyunu",
-  rulet:      "rulet oyna, çark",
-  bj:         "blackjack oyna, 21 oyunu",
-  duel:       "düello, 1v1 para bahsi",
-  bet:        "bahis yap, para dizi",
-  ekonlider:  "ekonomi lider tablosu, en zenginler, sıralama",
-  profil:     "seviye profili, xp durumu, rank kartı göster",
-  lider:      "seviye lider tablosu, xp sıralaması",
-  seviye:     "mevcut level, kaçıncı seviyedeyim",
-  rps:        "taş kağıt makas oyna",
-  mine:       "mayın tarlası oyna, minesweeper",
-  zar:        "zar at, dice",
-  "8top":     "sihirli 8 top, karar ver",
-  patla:      "balon patlatma oyunu",
   guard:      "sunucu koruma ayarları, guard sistemi",
   kick:       "kullanıcıyı at, sunucudan çıkar",
   ban:        "kullanıcıyı banla, yasakla",

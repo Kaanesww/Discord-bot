@@ -30,7 +30,7 @@ export interface HelpCategory {
   commands: CmdEntry[];
 }
 
-export const HELP_CATEGORIES: HelpCategory[] = [
+const ALL_HELP_CATEGORIES: HelpCategory[] = [
   {
     key: "moderasyon", label: "Moderasyon", icon: "🛡️",
     color: "#ed4245", gradient: ["#ed424533", "#ed424511"],
@@ -52,6 +52,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { name: "modsetup durum",         desc: "Mod ayarlarını & rolleri gösterir" },
       { name: "modsetup rol <k> @rol",  desc: "Role mod komutu izni ver" },
       { name: "modsetup rolkaldir <k> @r", desc: "Rol iznini kaldırır" },
+      { name: "modsetup yetkili ekle/kaldir @rol", desc: "Yetkili rolünü yönetir" },
+      { name: "modsetup üstyetkili ekle/kaldir @rol", desc: "Onay verecek üst yetkili rolünü yönetir" },
+      { name: "modsetup onaykanal #kanal", desc: "Ban/kick onay kanalını ayarlar" },
       { name: "modsetup log #kanal",    desc: "Mod işlemlerini kanala loglar" },
     ],
   },
@@ -114,6 +117,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     color: "#57f287", gradient: ["#57f28733", "#57f28711"],
     commands: [
       { name: "setprefix <yeni>",              desc: "Sunucu prefix'ini değiştirir" },
+      { name: "botadmin liste",                desc: "Bot admin panelini açar (bot sahibi)" },
+      { name: "sunucukapat",                   desc: "Sunucuyu buton onayıyla geçici olarak kilitler (sunucu sahibi)" },
+      { name: "sunucuaç",                      desc: "Sunucuyu buton onayıyla yeniden açar (sunucu sahibi)" },
       { name: "sunucukur",                     desc: "Tüm kanalları oluşturur" },
       { name: "sunucukopyala <ID>",            desc: "Başka sunucuyu kopyalar (kanal)" },
       { name: "rolkopya <sunucu-ID>",          desc: "Rolleri renkler/izinler/ikonla kopyalar" },
@@ -259,6 +265,23 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
 ];
+
+// Kullanımdan kaldırılan özellikler yardım menüsünde ve kategori butonlarında
+// görünmez. Handler modülleri geride bırakılabilir; böylece eski veriler bozulmaz.
+const REMOVED_HELP_CATEGORIES = new Set([
+  "seviye",
+  "ekonomi",
+  "oyunlar",
+  "otorol",
+  "cekilis",
+  "stat",
+  "stat-extra",
+  "guard", // İlk Guard kategorisi daha kapsamlı olan guard-extra ile birleştirildi.
+]);
+
+export const HELP_CATEGORIES: HelpCategory[] = ALL_HELP_CATEGORIES.filter(
+  (category) => !REMOVED_HELP_CATEGORIES.has(category.key),
+);
 
 // ── Yardımcı çizim fonksiyonları ──────────────────────────────────────────────
 
