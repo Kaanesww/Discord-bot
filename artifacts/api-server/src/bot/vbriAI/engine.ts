@@ -227,7 +227,7 @@ export async function processVbriAI(message: Message, rawText: string): Promise<
 
   // ── Kategori yardımı ───────────────────────────────────────────────────
   const catMatch = lower.match(
-    /(müzik|müzik|moderasyon|mod|ekonomi|ekon|oyun|seviye|level|yönetim|yonetim)\s*(komutları?|listesi?|neler)/
+    /(müzik|müzik|moderasyon|mod|ekonomi|ekon|oyun|yönetim|yonetim)\s*(komutları?|listesi?|neler)/
   );
   if (catMatch) {
     const catQuery = catMatch[1]!;

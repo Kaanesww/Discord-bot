@@ -53,9 +53,9 @@ export const SELF_ANSWERS = [
 // ── Yetenek soruları ─────────────────────────────────────────────────────────
 
 export const CAPABILITY_ANSWERS = [
-  "Neler yapabilirim mi? Moderasyon (ban/kick/warn/timeout), müzik çalma, ekonomi sistemi, oyunlar (taş-kağıt-makas, mayın tarlası, zar...), seviye sistemi, sunucu koruma — ve daha fazlası! `v!yardim` yaz tam listeyi gör.",
-  "Bir sürü şey! Kısaca: müzik, moderasyon, ekonomi (coin sistemi), oyunlar, seviye sistemi, sunucu yönetimi. Aklında ne var, söyle.",
-  "Yapabileceklerim:\n🎵 Müzik çalma\n🛡️ Moderasyon (ban, kick, warn, timeout)\n💰 Ekonomi sistemi\n🎮 Oyunlar\n📊 Seviye sistemi\n🔧 Sunucu yönetimi\nTamam mı sana?",
+  "Neler yapabilirim mi? Moderasyon (ban/kick/warn/timeout), müzik çalma, ekonomi sistemi, oyunlar (taş-kağıt-makas, mayın tarlası, zar...), Guard ve sunucu koruma — ve daha fazlası! `v!yardim` yaz tam listeyi gör.",
+  "Bir sürü şey! Kısaca: müzik, moderasyon, ekonomi (coin sistemi), oyunlar, Guard ve sunucu yönetimi. Aklında ne var, söyle.",
+  "Yapabileceklerim:\n🎵 Müzik çalma\n🛡️ Moderasyon (ban, kick, warn, timeout)\n💰 Ekonomi sistemi\n🎮 Oyunlar\n🛡️ Guard ve sunucu koruma\n🔧 Sunucu yönetimi\nTamam mı sana?",
 ];
 
 // ── Takdir/iltifat ───────────────────────────────────────────────────────────

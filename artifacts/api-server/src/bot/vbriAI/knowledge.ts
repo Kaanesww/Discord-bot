@@ -14,38 +14,6 @@ export interface CommandInfo {
 }
 
 const ALL_COMMANDS: CommandInfo[] = [
-  // ── SEVİYE / PROFİL ────────────────────────────────────────────────────────
-  {
-    names: ["level", "seviye", "rank", "profil", "profile", "lvl"],
-    category: "Seviye",
-    description: "Kendi veya başka birinin seviye kartını gösterir. XP, seviye ve sıralamayı güzel bir kart olarak sunar.",
-    usage: "v!level [@kullanıcı]",
-    example: "v!level veya v!level @ahmet",
-    note: "Mesaj göndererek ve ses kanalında durarak XP kazanabilirsin.",
-  },
-  {
-    names: ["leaderboard", "lb", "top", "lider", "sıralama"],
-    category: "Seviye",
-    description: "Sunucunun seviye lider tablosunu gösterir. En çok XP kazananlar listelenir.",
-    usage: "v!lb",
-    example: "v!lb",
-  },
-  {
-    names: ["levelrol", "levelrole"],
-    category: "Seviye",
-    description: "Belirli bir seviyeye ulaşınca otomatik verilecek rolü ayarlar.",
-    usage: "v!levelrol <seviye> @rol",
-    example: "v!levelrol 10 @Veteran",
-    permission: "Sunucu sahibi",
-  },
-  {
-    names: ["levelsistemi", "leveltoggle", "levelaç", "levelkapat"],
-    category: "Seviye",
-    description: "Sunucuda seviye sistemini açar veya kapatır.",
-    usage: "v!levelsistemi aç/kapat",
-    example: "v!levelsistemi kapat",
-    permission: "Sunucu sahibi",
-  },
   // ── EKONOMİ ────────────────────────────────────────────────────────────────
   {
     names: ["bakiye", "balance", "para", "cüzdan"],

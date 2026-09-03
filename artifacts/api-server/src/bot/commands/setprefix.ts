@@ -22,5 +22,5 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const oldPrefix = await getPrefix(guildId);
   await setPrefix(guildId, newPrefix);
 
-  await interaction.reply(`✅ Prefix **\`${oldPrefix}\`** → **\`${newPrefix}\`** olarak değiştirildi.\nArtık komutları \`${newPrefix}kick\`, \`${newPrefix}level\`, \`${newPrefix}leaderboard\` şeklinde kullanabilirsin.`);
+  await interaction.reply(`✅ Prefix **\`${oldPrefix}\`** → **\`${newPrefix}\`** olarak değiştirildi.\nArtık komutları \`${newPrefix}kick\`, \`${newPrefix}guard\`, \`${newPrefix}koruma\` şeklinde kullanabilirsin.`);
 }

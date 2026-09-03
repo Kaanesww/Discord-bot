@@ -54,7 +54,6 @@ const STRUCTURE: CategoryDef[] = [
       { name: "💰・trade-market", type: "text" },
       { name: "🐉・pet-showcase", type: "text" },
       { name: "📦・loot-flex", type: "text" },
-      { name: "📊・leaderboard", type: "text" },
     ],
   },
   {

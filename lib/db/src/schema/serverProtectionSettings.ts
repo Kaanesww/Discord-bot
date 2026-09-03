@@ -8,6 +8,8 @@ export const serverProtectionSettingsTable = pgTable("server_protection_settings
   leaveEnabled:     boolean("leave_enabled").notNull().default(true),
   channelEnabled:   boolean("channel_enabled").notNull().default(false),
   roleEnabled:      boolean("role_enabled").notNull().default(false),
+  channelThreshold: integer("channel_threshold").notNull().default(4),
+  roleThreshold:    integer("role_threshold").notNull().default(4),
   joinThreshold:    integer("join_threshold").notNull().default(5),
   leaveThreshold:   integer("leave_threshold").notNull().default(5),
   changeThreshold:  integer("change_threshold").notNull().default(4),

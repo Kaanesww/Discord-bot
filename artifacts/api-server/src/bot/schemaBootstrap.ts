@@ -147,6 +147,18 @@ export async function ensureBotSchema(): Promise<void> {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS spam_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS link_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS bot_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS emoji_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS role_threshold INTEGER NOT NULL DEFAULT 5;
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS role_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS channel_threshold INTEGER NOT NULL DEFAULT 4;
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS channel_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE guard_settings ADD COLUMN IF NOT EXISTS action_window_seconds INTEGER NOT NULL DEFAULT 10;
+    ALTER TABLE server_protection_settings ADD COLUMN IF NOT EXISTS channel_threshold INTEGER NOT NULL DEFAULT 4;
+    ALTER TABLE server_protection_settings ADD COLUMN IF NOT EXISTS role_threshold INTEGER NOT NULL DEFAULT 4;
+
     ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT 'v!';
     ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_enabled BOOLEAN NOT NULL DEFAULT TRUE;
     ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();

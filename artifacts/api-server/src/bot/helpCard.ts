@@ -59,20 +59,6 @@ const ALL_HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    key: "seviye", label: "Seviye", icon: "⭐",
-    color: "#5865f2", gradient: ["#5865f233", "#5865f211"],
-    commands: [
-      { name: "level [@kişi]",           desc: "Seviye ve profil kartı" },
-      { name: "lb",                      desc: "Sunucu liderboard kartı" },
-      { name: "levelrol ekle <lvl> @rol",desc: "Seviye rol ödülü ekler" },
-      { name: "levelrol liste",          desc: "Tüm rol ödüllerini listeler" },
-      { name: "levelrol kaldir <lvl>",   desc: "Rol ödülünü kaldırır" },
-      { name: "level aç",               desc: "Level sistemini açar (Admin)" },
-      { name: "level kapat",            desc: "Level sistemini kapatır (Admin)" },
-      { name: "level durum",            desc: "Level sisteminin durumunu gösterir" },
-    ],
-  },
-  {
     key: "ekonomi", label: "Ekonomi", icon: "💰",
     color: "#ffd700", gradient: ["#ffd70033", "#ffd70011"],
     commands: [
@@ -165,8 +151,9 @@ const ALL_HELP_CATEGORIES: HelpCategory[] = [
       { name: "guard link whitelist ekle/kaldir <domain>", desc: "İzin verilen domainler" },
       { name: "guard bot aç [aksiyon]",       desc: "Bot girişini engelle: kick/ban" },
       { name: "guard emoji aç [max N]",       desc: "Fazla emoji sil (varsayılan 5)" },
-      { name: "guard rol aç",                 desc: "Toplu rol saldırısını tespit et" },
-      { name: "guard kanal aç",               desc: "Toplu kanal saldırısını tespit et" },
+      { name: "guard rol aç eşik 5 aksiyon mute+ban+log", desc: "Rol saldırısında birden fazla işlem uygula" },
+      { name: "guard kanal aç eşik 6 aksiyon mute+kick+log", desc: "Kanal saldırısında birden fazla işlem uygula" },
+      { name: "koruma eşik kanal 6",          desc: "Sunucu sahibi kanal kilitleme eşiğini belirler" },
       { name: "guard log #kanal",             desc: "Guard olaylarını bu kanala logla" },
       { name: "loglar aç/kapat/durum",        desc: "Otomatik embed log kanallarını yönetir" },
       { name: "loglar kullanıcı <ID>",        desc: "Owner için kullanıcının tüm işlemlerini gösterir" },
@@ -270,7 +257,6 @@ const ALL_HELP_CATEGORIES: HelpCategory[] = [
 // Kullanımdan kaldırılan özellikler yardım menüsünde ve kategori butonlarında
 // görünmez. Handler modülleri geride bırakılabilir; böylece eski veriler bozulmaz.
 const REMOVED_HELP_CATEGORIES = new Set([
-  "seviye",
   "ekonomi",
   "oyunlar",
   "otorol",
@@ -465,8 +451,8 @@ export async function generateHelpCard(prefix: string): Promise<Buffer> {
   ctx.fillStyle = "#72767d";
   ctx.font = `12px '${FONT_FAMILY}'`;
   ctx.textAlign = "center";
-  ctx.fillText("💡 Bakiye tüm sunucularda ortaktır  •  Ses kanalında dakikada XP  •  Seviye atladıkça kart teması değişir  •  🍀 pray ile şansını artır!", W / 2, fy + 22);
-  ctx.fillText(`VBRI Bot  •  ${prefix}yardim <moderasyon|seviye|ekonomi|oyunlar|muzik|yonetim>`, W / 2, fy + 38);
+  ctx.fillText("💡 Bakiye tüm sunucularda ortaktır  •  Guard eşikleri sunucu sahibine özeldir  •  🍀 pray ile şansını artır!", W / 2, fy + 22);
+  ctx.fillText(`VBRI Bot  •  ${prefix}yardim <moderasyon|muzik|yonetim>`, W / 2, fy + 38);
   ctx.textAlign = "left";
 
   return canvas.toBuffer("image/png");

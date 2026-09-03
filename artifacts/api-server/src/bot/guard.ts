@@ -18,6 +18,8 @@ import { sendMessageChannel } from "./types";
 // ── DB yardımcıları ──────────────────────────────────────────────────────────
 
 type GuardConfig = typeof guardSettingsTable.$inferSelect;
+export type GuardAction = "delete" | "warn" | "mute" | "kick" | "ban" | "log";
+const ALL_GUARD_ACTIONS: GuardAction[] = ["delete", "warn", "mute", "kick", "ban", "log"];
 const guardCache = new Map<string, { value: GuardConfig; expiresAt: number }>();
 const GUARD_CACHE_TTL = 15_000;
 
@@ -26,16 +28,25 @@ const defaultGuard = (guildId: string): GuardConfig => ({
   spamEnabled: false,
   spamThreshold: 5,
   spamAction: "delete",
+  spamActions: "[]",
   linkEnabled: false,
   linkAction: "delete",
+  linkActions: "[]",
   linkWhitelist: "[]",
   botEnabled: false,
   botAction: "kick",
+  botActions: "[]",
   emojiEnabled: false,
   emojiMax: 5,
   emojiAction: "delete",
+  emojiActions: "[]",
   roleEnabled: false,
+  roleThreshold: 5,
+  roleActions: "[]",
   channelEnabled: false,
+  channelThreshold: 4,
+  channelActions: "[]",
+  actionWindowSeconds: 10,
   logsEnabled: false,
   logChannelId: null,
   banLogChannelId: null,
@@ -85,7 +96,106 @@ export async function ensureGuardSchema(): Promise<void> {
       ADD COLUMN IF NOT EXISTS general_log_channel_id TEXT
       , ADD COLUMN IF NOT EXISTS protection_log_channel_id TEXT
       , ADD COLUMN IF NOT EXISTS member_log_channel_id TEXT
+      , ADD COLUMN IF NOT EXISTS spam_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS link_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS bot_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS emoji_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS role_threshold INTEGER NOT NULL DEFAULT 5
+      , ADD COLUMN IF NOT EXISTS role_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS channel_threshold INTEGER NOT NULL DEFAULT 4
+      , ADD COLUMN IF NOT EXISTS channel_actions TEXT NOT NULL DEFAULT '[]'
+      , ADD COLUMN IF NOT EXISTS action_window_seconds INTEGER NOT NULL DEFAULT 10
   `);
+}
+
+function parseActions(raw: string | null | undefined, legacy: string, fallback: GuardAction[]): GuardAction[] {
+  try {
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) {
+      const valid = parsed.filter((action): action is GuardAction => ALL_GUARD_ACTIONS.includes(action));
+      if (valid.length) return [...new Set(valid)];
+    }
+  } catch { /**/ }
+  const legacyAction = ALL_GUARD_ACTIONS.includes(legacy as GuardAction)
+    ? legacy as GuardAction
+    : undefined;
+  return legacyAction
+    ? [legacyAction, ...fallback.filter((action) => action !== legacyAction)]
+    : fallback;
+}
+
+export function getGuardActions(
+  cfg: GuardConfig,
+  module: "spam" | "link" | "bot" | "emoji" | "role" | "channel",
+): GuardAction[] {
+  const actions = module === "spam"
+    ? parseActions(cfg.spamActions, cfg.spamAction, ["delete", "log"])
+    : module === "link"
+      ? parseActions(cfg.linkActions, cfg.linkAction, ["delete", "log"])
+      : module === "bot"
+        ? parseActions(cfg.botActions, cfg.botAction, ["kick", "log"])
+        : module === "emoji"
+          ? parseActions(cfg.emojiActions, cfg.emojiAction, ["delete", "log"])
+          : module === "role"
+            ? parseActions(cfg.roleActions, "log", ["log", "mute"])
+            : parseActions(cfg.channelActions, "log", ["log", "mute"]);
+  return [...new Set(actions)];
+}
+
+export function parseGuardActionInput(value: string | undefined): GuardAction[] | null {
+  if (!value) return null;
+  const actions = value
+    .toLowerCase()
+    .split(/[,+|]/)
+    .map((action) => action.trim())
+    .filter(Boolean);
+  if (!actions.length || actions.some((action) => !ALL_GUARD_ACTIONS.includes(action as GuardAction))) return null;
+  return [...new Set(actions as GuardAction[])];
+}
+
+function canModerate(member: GuildMember): boolean {
+  return !member.user.bot && !member.permissions.has("Administrator");
+}
+
+async function executeMessageActions(
+  message: Message,
+  actions: GuardAction[],
+  warning: string,
+  logMessage: string,
+  logChannelId: string | null | undefined,
+): Promise<void> {
+  for (const action of actions) {
+    if (action === "delete") await message.delete().catch(() => null);
+    if (action === "warn") {
+      const warningMessage = await sendMessageChannel(message, `⚠️ ${message.author} ${warning}`);
+      if (warningMessage) setTimeout(() => warningMessage.delete().catch(() => null), 5_000);
+    }
+    if (action === "mute" && message.member && canModerate(message.member)) {
+      await message.member.timeout(5 * 60_000, `Guard: ${warning}`).catch(() => null);
+    }
+    if (action === "kick" && message.member && canModerate(message.member)) {
+      await message.member.kick(`Guard: ${warning}`).catch(() => null);
+    }
+    if (action === "ban" && message.member && canModerate(message.member)) {
+      await message.member.ban({ reason: `Guard: ${warning}` }).catch(() => null);
+    }
+    if (action === "log") await sendLog(message.guild!, logChannelId, logMessage).catch(() => null);
+  }
+}
+
+async function executeMemberActions(
+  guild: Guild,
+  executorId: string,
+  actions: GuardAction[],
+  reason: string,
+): Promise<void> {
+  const member = await guild.members.fetch(executorId).catch(() => null);
+  if (!member || !canModerate(member)) return;
+  for (const action of actions) {
+    if (action === "mute") await member.timeout(5 * 60_000, `Guard: ${reason}`).catch(() => null);
+    if (action === "kick") await member.kick(`Guard: ${reason}`).catch(() => null);
+    if (action === "ban") await member.ban({ reason: `Guard: ${reason}` }).catch(() => null);
+  }
 }
 
 export async function getGuard(guildId: string) {
@@ -288,22 +398,14 @@ export async function handleSpam(message: Message): Promise<boolean> {
   // Eşik aşıldı — aksiyonu uygula
   gMap.set(message.author.id, []); // sıfırla
   try {
-    await message.delete().catch(() => null);
-    const action = cfg.spamAction;
-    const member = message.member;
-    if (action === "warn") {
-      await sendMessageChannel(message, `⚠️ ${message.author} spam yapıyorsun!`).then((m) => {
-        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
-      });
-    } else if (action === "mute") {
-      await member.timeout(5 * 60_000, "Guard: Spam koruma").catch(() => null);
-      await sendMessageChannel(message, `🔇 ${message.author} spam yaptığı için 5 dakika susturuldu.`).then((m) => {
-        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
-      });
-    } else if (action === "kick") {
-      await member.kick("Guard: Spam koruma").catch(() => null);
-    }
-    await sendLog(message.guild!, cfg.logChannelId, `**Spam** → ${message.author.username} (${action}) — ${times.length} mesaj/5sn`);
+    const actions = getGuardActions(cfg, "spam");
+    await executeMessageActions(
+      message,
+      actions,
+      "spam yapıyorsun!",
+      `**Spam** → ${message.author.username} (${actions.join(", ")}) — ${times.length} mesaj/5sn`,
+      cfg.logChannelId,
+    );
   } catch (err) {
     logger.error({ err }, "Guard spam aksiyonu hatası");
   }
@@ -333,16 +435,14 @@ export async function handleLink(message: Message): Promise<boolean> {
   if (!blocked.length) return false;
 
   try {
-    await message.delete().catch(() => null);
-    const action = cfg.linkAction;
-    if (action === "warn") {
-      await sendMessageChannel(message, `⚠️ ${message.author} link paylaşımı yasaktır!`).then((m) => {
-        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
-      });
-    } else if (action === "kick") {
-      await message.member.kick("Guard: Link koruma").catch(() => null);
-    }
-    await sendLog(message.guild!, cfg.logChannelId, `**Link** → ${message.author.username} (${action}) — \`${blocked[0]}\``);
+    const actions = getGuardActions(cfg, "link");
+    await executeMessageActions(
+      message,
+      actions,
+      "link paylaşımı yasaktır!",
+      `**Link** → ${message.author.username} (${actions.join(", ")}) — \`${blocked[0]}\``,
+      cfg.logChannelId,
+    );
   } catch (err) {
     logger.error({ err }, "Guard link aksiyonu hatası");
   }
@@ -365,13 +465,14 @@ export async function handleEmoji(message: Message): Promise<boolean> {
   if (matches.length <= cfg.emojiMax) return false;
 
   try {
-    await message.delete().catch(() => null);
-    if (cfg.emojiAction === "warn") {
-      await sendMessageChannel(message, `⚠️ ${message.author} çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`).then((m) => {
-        if (m) setTimeout(() => m.delete().catch(() => null), 5000);
-      });
-    }
-    await sendLog(message.guild!, cfg.logChannelId, `**Emoji** → ${message.author.username} — ${matches.length} emoji (max ${cfg.emojiMax})`);
+    const actions = getGuardActions(cfg, "emoji");
+    await executeMessageActions(
+      message,
+      actions,
+      `çok fazla emoji kullandın! (Max: ${cfg.emojiMax})`,
+      `**Emoji** → ${message.author.username} (${actions.join(", ")}) — ${matches.length} emoji (max ${cfg.emojiMax})`,
+      cfg.logChannelId,
+    );
   } catch (err) {
     logger.error({ err }, "Guard emoji aksiyonu hatası");
   }
@@ -386,12 +487,14 @@ export async function handleBotJoin(member: GuildMember): Promise<void> {
   if (!cfg.botEnabled) return;
 
   try {
-    if (cfg.botAction === "ban") {
-      await member.ban({ reason: "Guard: Bot koruma — bot girişi engellendi" });
-    } else {
-      await member.kick("Guard: Bot koruma — bot girişi engellendi");
+    const actions = getGuardActions(cfg, "bot");
+    for (const action of actions) {
+      if (action === "ban") await member.ban({ reason: "Guard: Bot koruma — bot girişi engellendi" }).catch(() => null);
+      if (action === "kick") await member.kick("Guard: Bot koruma — bot girişi engellendi").catch(() => null);
     }
-    await sendLog(member.guild, cfg.logChannelId, `**Bot Engel** → \`${member.user.username}\` (${member.user.id}) — ${cfg.botAction}`);
+    if (actions.includes("log")) {
+      await sendLog(member.guild, cfg.logChannelId, `**Bot Engel** → \`${member.user.username}\` (${member.user.id}) — ${actions.join(", ")}`);
+    }
   } catch (err) {
     logger.error({ err }, "Guard bot aksiyonu hatası");
   }
@@ -413,7 +516,7 @@ export async function handleRoleUpdate(guild: Guild, entry: GuildAuditLogsEntry)
   const now = Date.now();
   const prev = roleChangeMap.get(key);
 
-  if (prev && now - prev.ts < 10_000) {
+  if (prev && now - prev.ts < cfg.actionWindowSeconds * 1_000) {
     prev.count++;
     roleChangeMap.set(key, prev);
   } else {
@@ -421,16 +524,14 @@ export async function handleRoleUpdate(guild: Guild, entry: GuildAuditLogsEntry)
   }
 
   const record = roleChangeMap.get(key)!;
-  if (record.count >= 5) {
+  if (record.count >= cfg.roleThreshold) {
     roleChangeMap.set(key, { count: 0, ts: now }); // sıfırla
-    await sendLog(guild, cfg.logChannelId, `⚠️ **Rol Saldırısı Şüphesi** → <@${executorId}> 10 saniyede ${record.count}+ rol değişikliği yaptı!`);
-    // Moderatörü 5 dakika sustur
-    try {
-      const member = await guild.members.fetch(executorId);
-      if (!member.permissions.has("Administrator")) {
-        await member.timeout(5 * 60_000, "Guard: Şüpheli toplu rol değişikliği");
-      }
-    } catch { /**/ }
+    const reason = `Şüpheli toplu rol değişikliği: ${record.count}+ olay`;
+    const actions = getGuardActions(cfg, "role");
+    if (actions.includes("log")) {
+      await sendLog(guild, cfg.logChannelId, `⚠️ **Rol Saldırısı Şüphesi** → <@${executorId}> 10 saniyede ${record.count}+ rol değişikliği yaptı! (${actions.join(", ")})`);
+    }
+    await executeMemberActions(guild, executorId, actions, reason);
   }
 }
 
@@ -449,7 +550,7 @@ export async function handleChannelChange(guild: Guild, entry: GuildAuditLogsEnt
   const now = Date.now();
   const prev = channelChangeMap.get(key);
 
-  if (prev && now - prev.ts < 10_000) {
+  if (prev && now - prev.ts < cfg.actionWindowSeconds * 1_000) {
     prev.count++;
     channelChangeMap.set(key, prev);
   } else {
@@ -457,14 +558,13 @@ export async function handleChannelChange(guild: Guild, entry: GuildAuditLogsEnt
   }
 
   const record = channelChangeMap.get(key)!;
-  if (record.count >= 4) {
+  if (record.count >= cfg.channelThreshold) {
     channelChangeMap.set(key, { count: 0, ts: now });
-    await sendLog(guild, cfg.logChannelId, `⚠️ **Kanal Saldırısı Şüphesi** → <@${executorId}> 10 saniyede ${record.count}+ kanal değişikliği yaptı!`);
-    try {
-      const member = await guild.members.fetch(executorId);
-      if (!member.permissions.has("Administrator")) {
-        await member.timeout(5 * 60_000, "Guard: Şüpheli toplu kanal değişikliği");
-      }
-    } catch { /**/ }
+    const reason = `Şüpheli toplu kanal değişikliği: ${record.count}+ olay`;
+    const actions = getGuardActions(cfg, "channel");
+    if (actions.includes("log")) {
+      await sendLog(guild, cfg.logChannelId, `⚠️ **Kanal Saldırısı Şüphesi** → <@${executorId}> ${cfg.actionWindowSeconds} saniyede ${record.count}+ kanal değişikliği yaptı! (${actions.join(", ")})`);
+    }
+    await executeMemberActions(guild, executorId, actions, reason);
   }
 }

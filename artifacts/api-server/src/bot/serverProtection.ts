@@ -23,6 +23,8 @@ export type ProtectionSetupDraft = {
   leaveEnabled: boolean;
   channelEnabled: boolean;
   roleEnabled: boolean;
+  channelThreshold: number;
+  roleThreshold: number;
   joinThreshold: number;
   leaveThreshold: number;
   changeThreshold: number;
@@ -61,6 +63,8 @@ const defaults = (guildId: string): ProtectionConfig => ({
   leaveEnabled: true,
   channelEnabled: false,
   roleEnabled: false,
+  channelThreshold: 4,
+  roleThreshold: 4,
   joinThreshold: 5,
   leaveThreshold: 5,
   changeThreshold: 4,
@@ -88,6 +92,8 @@ export async function ensureServerProtectionSchema(): Promise<void> {
       leave_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       channel_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       role_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      channel_threshold INTEGER NOT NULL DEFAULT 4,
+      role_threshold INTEGER NOT NULL DEFAULT 4,
       join_threshold INTEGER NOT NULL DEFAULT 5,
       leave_threshold INTEGER NOT NULL DEFAULT 5,
       change_threshold INTEGER NOT NULL DEFAULT 4,
@@ -100,6 +106,11 @@ export async function ensureServerProtectionSchema(): Promise<void> {
       locked_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    ALTER TABLE server_protection_settings
+      ADD COLUMN IF NOT EXISTS channel_threshold INTEGER NOT NULL DEFAULT 4,
+      ADD COLUMN IF NOT EXISTS role_threshold INTEGER NOT NULL DEFAULT 4
   `);
 }
 
@@ -138,6 +149,8 @@ export function createProtectionSetup(guildId: string, userId: string, config: P
     leaveEnabled: config.leaveEnabled,
     channelEnabled: config.channelEnabled,
     roleEnabled: config.roleEnabled,
+    channelThreshold: config.channelThreshold ?? config.changeThreshold,
+    roleThreshold: config.roleThreshold ?? config.changeThreshold,
     joinThreshold: config.joinThreshold,
     leaveThreshold: config.leaveThreshold,
     changeThreshold: config.changeThreshold,
@@ -166,6 +179,8 @@ export async function saveProtectionSetup(draft: ProtectionSetupDraft): Promise<
     leaveEnabled: draft.leaveEnabled,
     channelEnabled: draft.channelEnabled,
     roleEnabled: draft.roleEnabled,
+    channelThreshold: Math.max(2, Math.min(100, draft.channelThreshold)),
+    roleThreshold: Math.max(2, Math.min(100, draft.roleThreshold)),
     joinThreshold: Math.max(2, Math.min(100, draft.joinThreshold)),
     leaveThreshold: Math.max(2, Math.min(100, draft.leaveThreshold)),
     changeThreshold: Math.max(2, Math.min(100, draft.changeThreshold)),
@@ -175,6 +190,22 @@ export async function saveProtectionSetup(draft: ProtectionSetupDraft): Promise<
 
 export async function setProtectionEnabled(guildId: string, enabled: boolean): Promise<void> {
   await setProtection(guildId, { enabled });
+}
+
+export async function setProtectionThreshold(
+  guildId: string,
+  condition: "join" | "leave" | "channel" | "role",
+  value: number,
+): Promise<void> {
+  const threshold = Math.max(2, Math.min(100, Math.floor(value)));
+  const patch = condition === "join"
+    ? { joinThreshold: threshold }
+    : condition === "leave"
+      ? { leaveThreshold: threshold }
+      : condition === "channel"
+        ? { channelThreshold: threshold, changeThreshold: threshold }
+        : { roleThreshold: threshold, changeThreshold: threshold };
+  await setProtection(guildId, patch);
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -463,7 +494,9 @@ export async function checkProtectionTrigger(
     ? config.joinThreshold
     : condition === "leave"
       ? config.leaveThreshold
-      : config.changeThreshold;
+      : condition === "channel"
+        ? config.channelThreshold ?? config.changeThreshold
+        : config.roleThreshold ?? config.changeThreshold;
   if (times.length < threshold) return;
   eventWindows.set(key, []);
   await lockServer(
@@ -481,8 +514,8 @@ export function protectionSetupEmbed(draft: ProtectionSetupDraft): EmbedBuilder 
     .addFields(
       { name: "Toplu giriş", value: `${state(draft.joinEnabled)}\n${draft.joinThreshold} kişi / ${draft.windowSeconds} sn`, inline: true },
       { name: "Toplu çıkış", value: `${state(draft.leaveEnabled)}\n${draft.leaveThreshold} kişi / ${draft.windowSeconds} sn`, inline: true },
-      { name: "Kanal değişikliği", value: `${state(draft.channelEnabled)}\n${draft.changeThreshold} olay / ${draft.windowSeconds} sn`, inline: true },
-      { name: "Rol değişikliği", value: `${state(draft.roleEnabled)}\n${draft.changeThreshold} olay / ${draft.windowSeconds} sn`, inline: true },
+      { name: "Kanal değişikliği", value: `${state(draft.channelEnabled)}\n${draft.channelThreshold} olay / ${draft.windowSeconds} sn`, inline: true },
+      { name: "Rol değişikliği", value: `${state(draft.roleEnabled)}\n${draft.roleThreshold} olay / ${draft.windowSeconds} sn`, inline: true },
     )
     .setFooter({ text: "Seçimleri değiştirdikten sonra Kurulumu Kaydet butonuna bas." })
     .setTimestamp();

@@ -13,11 +13,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { logger } from "../lib/logger";
-import { handleXp, getUserLevel, getRank, xpToNextLevel, getLeaderboard, getLevelRoles, setLevelRole, removeLevelRole } from "./leveling";
-import { getPrefix, setPrefix as setPrefixUtil, getLevelEnabled, setLevelEnabled } from "./guildSettings";
-import { generateProfileCard } from "./profileCard";
-import { generateLeaderboardCard, type LeaderboardEntry } from "./leaderboardCard";
-import { generateLevelUpCard } from "./levelUpCard";
+import { getPrefix, setPrefix as setPrefixUtil } from "./guildSettings";
 import { generateEconLevelUpCard } from "./econLevelCard";
 import { generateSicilCard } from "./sicilCard";
 import { generateHelpCard, generateCategoryHelpCard, HELP_CATEGORIES } from "./helpCard";
@@ -58,10 +54,12 @@ import {
   getGuard, setGuard, ensureGuardSchema, handleSpam, handleLink, handleEmoji,
   handleBotJoin, handleRoleUpdate, handleChannelChange, handleAuditLogEntry,
   handleMessageLog, handleBulkMessageLog, handleMemberLog,
+  getGuardActions, parseGuardActionInput,
 } from "./guard";
 import {
   ensureServerProtectionSchema, getProtection, createProtectionSetup,
   toggleProtectionSetup, saveProtectionSetup, setProtectionEnabled,
+  setProtectionThreshold,
   lockServer, clearProtection, disableProtection, checkProtectionTrigger,
   manuallyLockServer,
   protectionSetupEmbed, type ProtectionSetupDraft,
@@ -113,8 +111,6 @@ type PfxHandler = (m: Message, args: string[]) => Promise<void>;
 
 // ── Ses XP takibi ─────────────────────────────────────────────────────────────
 
-const voiceSessions = new Map<string, number>();
-const VOICE_XP_PER_MIN = 10;
 
 type AnonymousSetupSession = {
   guildId: string;
@@ -143,7 +139,7 @@ const SUNUCU_YAPISI = [
     { name: "🐾・owo-dünya", voice: false }, { name: "🦉・owo-chat", voice: false },
     { name: "⚔️・battle", voice: false }, { name: "🎰・gambling", voice: false },
     { name: "💰・trade-market", voice: false }, { name: "🐉・pet-showcase", voice: false },
-    { name: "📦・loot-flex", voice: false }, { name: "📊・leaderboard", voice: false },
+    { name: "📦・loot-flex", voice: false },
   ]},
   { name: "👑 ④ VIP", channels: [
     { name: "✨・vip-lounge", voice: false }, { name: "💬・vip-chat", voice: false },
@@ -202,75 +198,6 @@ function handValue(hand: Card[]): number {
 }
 
 // ── Prefix handler fonksiyonları ──────────────────────────────────────────────
-
-// LEVEL / PROFIL
-async function pfxLevel(m: Message): Promise<void> {
-  if (!m.guildId) return;
-  try {
-    const target = m.mentions.users.first() ?? m.author;
-    const ud = await getUserLevel(target.id, m.guildId);
-    const rank = await getRank(target.id, m.guildId);
-    const { current, needed } = xpToNextLevel(ud.xp, ud.level);
-    const bal = await getBalance(target.id).catch(() => ({ coins: 0 }));
-    const buf = await generateProfileCard({
-      username: target.displayName,
-      avatarUrl: target.displayAvatarURL({ extension: "png", size: 256 }),
-      level: ud.level, xp: current, xpNeeded: needed, rank,
-      messageCount: ud.messageCount, coins: bal.coins,
-    });
-    await m.reply({ files: [new AttachmentBuilder(buf, { name: "level.png" })] });
-  } catch (err: any) {
-    logger.error({ err }, "pfxLevel hata");
-    await m.reply(`❌ Profil kartı oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
-  }
-}
-
-// LEADERBOARD
-async function pfxLeaderboard(m: Message): Promise<void> {
-  if (!m.guildId) return;
-  try {
-    const top = await getLeaderboard(m.guildId, 10);
-    if (!top.length) { await m.reply("Henüz kimse mesaj atmamış! 🦗"); return; }
-    const entries: LeaderboardEntry[] = await Promise.all(top.map(async (e, i) => {
-      let username = "Kullanıcı"; let avatarUrl = "";
-      try { const u = await m.client.users.fetch(e.userId); username = u.displayName; avatarUrl = u.displayAvatarURL({ extension: "png", size: 64 }); } catch { /**/ }
-      const { current, needed } = xpToNextLevel(e.xp, e.level);
-      return { rank: i + 1, userId: e.userId, username, avatarUrl, level: e.level, xp: e.xp, xpCurrent: current, xpNeeded: needed };
-    }));
-    const buf = await generateLeaderboardCard(entries);
-    await m.reply({ files: [new AttachmentBuilder(buf, { name: "lb.png" })] });
-  } catch (err: any) {
-    logger.error({ err }, "pfxLeaderboard hata");
-    await m.reply(`❌ Liderboard oluşturulamadı: ${err?.message ?? "Bilinmeyen hata"}`).catch(() => null);
-  }
-}
-
-// LEVELROL
-async function pfxLevelRol(m: Message, args: string[]): Promise<void> {
-  if (!m.guildId || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("ManageRoles")) {
-    await m.reply("❌ **Manage Roles** iznin yok."); return;
-  }
-  const sub = args[0]?.toLowerCase();
-  if (sub === "ekle") {
-    const lvl = parseInt(args[1] ?? "0");
-    const role = m.mentions.roles.first();
-    if (isNaN(lvl) || lvl < 1 || !role) { await m.reply("❌ Kullanım: `levelrol ekle <seviye> @rol`"); return; }
-    await setLevelRole(m.guildId, lvl, role.id);
-    await m.reply(`✅ **${lvl}. seviye** için ${role} rolü eklendi!`);
-  } else if (sub === "kaldir") {
-    const lvl = parseInt(args[1] ?? "0");
-    if (isNaN(lvl) || lvl < 1) { await m.reply("❌ Kullanım: `levelrol kaldir <seviye>`"); return; }
-    const removed = await removeLevelRole(m.guildId, lvl);
-    await m.reply(removed ? `✅ **${lvl}. seviye** rol ödülü kaldırıldı.` : `❌ **${lvl}. seviye** için kayıtlı rol bulunamadı.`);
-  } else if (sub === "liste") {
-    const roles = await getLevelRoles(m.guildId);
-    if (!roles.length) { await m.reply("Henüz seviye rol ödülü eklenmemiş."); return; }
-    await m.reply(`🏆 **Seviye Rol Ödülleri:**\n${roles.map((r) => `**Seviye ${r.level}** → <@&${r.roleId}>`).join("\n")}`);
-  } else {
-    await m.reply("❌ Kullanım: `levelrol ekle|kaldir|liste`");
-  }
-}
 
 // SİCİL
 async function pfxSicil(m: Message): Promise<void> {
@@ -3127,8 +3054,8 @@ async function pfxKoruma(m: Message, args: string[]): Promise<void> {
         .addFields(
           { name: "Toplu giriş", value: `${on(config.joinEnabled)} — ${config.joinThreshold} kişi / ${config.windowSeconds} sn`, inline: true },
           { name: "Toplu çıkış", value: `${on(config.leaveEnabled)} — ${config.leaveThreshold} kişi / ${config.windowSeconds} sn`, inline: true },
-          { name: "Kanal değişikliği", value: `${on(config.channelEnabled)} — ${config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
-          { name: "Rol değişikliği", value: `${on(config.roleEnabled)} — ${config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
+          { name: "Kanal değişikliği", value: `${on(config.channelEnabled)} — ${config.channelThreshold ?? config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
+          { name: "Rol değişikliği", value: `${on(config.roleEnabled)} — ${config.roleThreshold ?? config.changeThreshold} olay / ${config.windowSeconds} sn`, inline: true },
           { name: "Bilgi kanalı", value: config.infoChannelId ? `<#${config.infoChannelId}>` : "Kilitlenince oluşturulacak", inline: true },
         )
         .setFooter({ text: "Kurulum: v!koruma setup • Temizleme: v!koruma temizle" })
@@ -3142,9 +3069,32 @@ async function pfxKoruma(m: Message, args: string[]): Promise<void> {
     draft.joinThreshold = setupNumber(args, ["giriş", "giris", "join"], draft.joinThreshold);
     draft.leaveThreshold = setupNumber(args, ["çıkış", "cikis", "leave"], draft.leaveThreshold);
     draft.changeThreshold = setupNumber(args, ["değişiklik", "degisiklik", "change"], draft.changeThreshold);
+    draft.channelThreshold = setupNumber(args, ["kanal", "channel"], draft.changeThreshold);
+    draft.roleThreshold = setupNumber(args, ["rol", "role"], draft.changeThreshold);
     draft.windowSeconds = setupNumber(args, ["süre", "sure", "saniye", "window"], draft.windowSeconds);
     protectionSetupSessions.set(`${m.guildId}:${m.author.id}`, draft);
     await m.reply({ embeds: [protectionSetupEmbed(draft)], components: protectionSetupRows(draft) });
+    return;
+  }
+
+  if (["eşik", "esik", "threshold"].includes(sub)) {
+    const conditionName = args[1]?.toLowerCase();
+    const condition = conditionName === "giriş" || conditionName === "giris" || conditionName === "join"
+      ? "join"
+      : conditionName === "çıkış" || conditionName === "cikis" || conditionName === "leave"
+        ? "leave"
+        : conditionName === "kanal" || conditionName === "channel"
+          ? "channel"
+          : conditionName === "rol" || conditionName === "role"
+            ? "role"
+            : null;
+    const value = Number(args[2]);
+    if (!condition || !Number.isInteger(value) || value < 2 || value > 100) {
+      await m.reply("❌ Kullanım: `koruma eşik kanal 6` (değer 2–100 arası olmalı).");
+      return;
+    }
+    await setProtectionThreshold(m.guildId, condition, value);
+    await m.reply(`✅ ${condition === "channel" ? "Kanal" : condition === "role" ? "Rol" : condition === "join" ? "Giriş" : "Çıkış"} koruması eşiği **${value}+ olay** olarak ayarlandı.`);
     return;
   }
 
@@ -3203,7 +3153,7 @@ async function pfxKoruma(m: Message, args: string[]): Promise<void> {
     return;
   }
 
-  await m.reply("❌ Kullanım: `koruma setup` | `koruma durum` | `koruma aç/kapat` | `koruma temizle`");
+  await m.reply("❌ Kullanım: `koruma setup kanal 6 rol 5` | `koruma eşik kanal 6` | `koruma durum` | `koruma aç/kapat` | `koruma temizle`");
 }
 
 // ── MANUEL SUNUCU KAPAT / AÇ ───────────────────────────────────────────────────
@@ -3321,17 +3271,19 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
     try { wl = JSON.parse(cfg.linkWhitelist); } catch { /**/ }
     const everyone = m.guild.roles.everyone;
     const status = (enabled: boolean) => enabled ? "🟢 Açık" : "🔴 Kapalı";
+    const actions = (module: Parameters<typeof getGuardActions>[1]) =>
+      getGuardActions(cfg, module).join(" + ");
     const embed = new EmbedBuilder()
       .setColor(0xed4245)
       .setTitle(`🛡️ Guard Ayarları — ${m.guild.name}`)
       .setDescription(`Ayar değiştirme yetkisi yalnızca sunucu sahibinde: <@${m.guild.ownerId}>`)
       .addFields(
-        { name: "💬 Spam Koruması", value: `${status(cfg.spamEnabled)}\nEşik: **${cfg.spamThreshold} mesaj / 5 sn**\nAksiyon: **${cfg.spamAction}**`, inline: true },
-        { name: "🔗 Link Koruması", value: `${status(cfg.linkEnabled)}\nAksiyon: **${cfg.linkAction}**\nWhitelist: ${wl.length ? wl.map((d) => `\`${d}\``).join(", ") : "Yok"}`, inline: true },
-        { name: "🤖 Bot Giriş Koruması", value: `${status(cfg.botEnabled)}\nAksiyon: **${cfg.botAction}**`, inline: true },
-        { name: "😀 Emoji Limiti", value: `${status(cfg.emojiEnabled)}\nLimit: **${cfg.emojiMax} emoji**\nAksiyon: **${cfg.emojiAction}**`, inline: true },
-        { name: "🎭 Rol Koruması", value: `${status(cfg.roleEnabled)}\n10 saniyede 5+ değişiklik alarmı`, inline: true },
-        { name: "📢 Kanal Koruması", value: `${status(cfg.channelEnabled)}\n10 saniyede 4+ değişiklik alarmı`, inline: true },
+        { name: "💬 Spam Koruması", value: `${status(cfg.spamEnabled)}\nEşik: **${cfg.spamThreshold} mesaj / 5 sn**\nAksiyonlar: **${actions("spam")}**`, inline: true },
+        { name: "🔗 Link Koruması", value: `${status(cfg.linkEnabled)}\nAksiyonlar: **${actions("link")}**\nWhitelist: ${wl.length ? wl.map((d) => `\`${d}\``).join(", ") : "Yok"}`, inline: true },
+        { name: "🤖 Bot Giriş Koruması", value: `${status(cfg.botEnabled)}\nAksiyonlar: **${actions("bot")}**`, inline: true },
+        { name: "😀 Emoji Limiti", value: `${status(cfg.emojiEnabled)}\nLimit: **${cfg.emojiMax} emoji**\nAksiyonlar: **${actions("emoji")}**`, inline: true },
+        { name: "🎭 Rol Koruması", value: `${status(cfg.roleEnabled)}\n${cfg.roleThreshold} olay / ${cfg.actionWindowSeconds} sn\nAksiyonlar: **${actions("role")}**`, inline: true },
+        { name: "📢 Kanal Koruması", value: `${status(cfg.channelEnabled)}\n${cfg.channelThreshold} olay / ${cfg.actionWindowSeconds} sn\nAksiyonlar: **${actions("channel")}**`, inline: true },
         { name: "🔒 Dış Uygulamalar", value: `${everyone.permissions.has(PermissionFlagsBits.UseExternalApps) ? "🟢 Açık" : "🔴 Engelli"}\nSunucuda olmayan uygulamalar`, inline: true },
         { name: "⚡ Uygulama Komutları", value: `${everyone.permissions.has(PermissionFlagsBits.UseApplicationCommands) ? "🟢 Açık" : "🔴 Engelli"}\nSlash/uygulama komutları`, inline: true },
         { name: "📋 Guard Logu", value: cfg.logChannelId ? `<#${cfg.logChannelId}>` : "Ayarlanmamış", inline: true },
@@ -3360,7 +3312,7 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
         .setTitle("🛡️ Guard Komutları")
         .setDescription("Bu ayarları yalnızca sunucu sahibi değiştirebilir.")
         .addFields(
-          { name: "Modül aç/kapat", value: "`guard spam aç/kapat eşik 5`\n`guard spam aç/kapat aksiyon warn`\n`guard link aç/kapat aksiyon delete`\n`guard bot aç/kapat aksiyon kick|ban`\n`guard emoji aç/kapat max 5 aksiyon delete`\n`guard rol aç/kapat`\n`guard kanal aç/kapat`" },
+          { name: "Modül aç/kapat", value: "`guard spam aç eşik 5`\n`guard spam aç aksiyon delete+mute+log`\n`guard link aç aksiyon delete+warn`\n`guard bot aç aksiyon kick+ban+log`\n`guard emoji aç max 5 aksiyon delete+warn`\n`guard rol aç eşik 5 aksiyon mute+ban+log`\n`guard kanal aç eşik 6 aksiyon mute+kick+log`" },
           { name: "Log kanalları", value: "`guard log #kanal` — eski Guard logu + genel log\n`guard log ban #kanal`\n`guard log mute #kanal`\n`guard log mesaj #kanal`\n`guard log silinen #kanal`\n`guard log genel #kanal`\nAyrıca: `guard banlog #kanal`, `guard mutelog #kanal`, `guard mesajlog #kanal`, `guard silinenlog #kanal`, `guard genellog #kanal`" },
           { name: "Otomatik log sistemi", value: "`loglar aç` — kategori ve kanalları otomatik oluşturur\n`loglar kapat` — mesaj gönderimini durdurur\n`loglar durum` — kanalları ve durumu gösterir\n`loglar kullanıcı <Discord ID>` — kullanıcının işlemlerini gösterir" },
           { name: "Link", value: "`guard link whitelist ekle example.com`\n`guard link whitelist kaldir example.com`" },
@@ -3492,17 +3444,35 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
       if (!isNaN(v) && v >= 2) patch.spamThreshold = v;
     }
     if (optKey === "aksiyon") {
-      if (["delete", "warn", "mute", "kick"].includes(optVal ?? "")) patch.spamAction = optVal;
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed) {
+        await m.reply("❌ Aksiyonları `+` ile ayır: `delete`, `warn`, `mute`, `kick`, `ban`, `log`.");
+        return;
+      }
+      patch.spamActions = JSON.stringify(parsed);
+      patch.spamAction = parsed[0];
     }
   } else if (modül === "link") {
     patch.linkEnabled = enabled;
     if (optKey === "aksiyon") {
-      if (["delete", "warn", "kick"].includes(optVal ?? "")) patch.linkAction = optVal;
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed) {
+        await m.reply("❌ Aksiyonları `+` ile ayır: `delete`, `warn`, `mute`, `kick`, `ban`, `log`.");
+        return;
+      }
+      patch.linkActions = JSON.stringify(parsed);
+      patch.linkAction = parsed[0];
     }
   } else if (modül === "bot") {
     patch.botEnabled = enabled;
     if (optKey === "aksiyon") {
-      if (["kick", "ban"].includes(optVal ?? "")) patch.botAction = optVal;
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed || parsed.some((action) => !["kick", "ban", "log"].includes(action))) {
+        await m.reply("❌ Bot koruması için `kick`, `ban` ve `log` aksiyonlarını kullan.");
+        return;
+      }
+      patch.botActions = JSON.stringify(parsed);
+      patch.botAction = parsed[0];
     }
   } else if (modül === "emoji") {
     patch.emojiEnabled = enabled;
@@ -3511,12 +3481,52 @@ async function pfxGuard(m: Message, args: string[]): Promise<void> {
       if (!isNaN(v) && v >= 1) patch.emojiMax = v;
     }
     if (optKey === "aksiyon") {
-      if (["delete", "warn"].includes(optVal ?? "")) patch.emojiAction = optVal;
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed) {
+        await m.reply("❌ Aksiyonları `+` ile ayır: `delete`, `warn`, `mute`, `kick`, `ban`, `log`.");
+        return;
+      }
+      patch.emojiActions = JSON.stringify(parsed);
+      patch.emojiAction = parsed[0];
     }
   } else if (modül === "rol") {
     patch.roleEnabled = enabled;
+    if (optKey === "esik" || optKey === "threshold") {
+      const v = parseInt(optVal ?? "5");
+      if (!isNaN(v) && v >= 2) patch.roleThreshold = Math.min(v, 100);
+    }
+    if (optKey === "aksiyon") {
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed) {
+        await m.reply("❌ Aksiyonları `+` ile ayır: `mute`, `kick`, `ban`, `log`.");
+        return;
+      }
+      patch.roleActions = JSON.stringify(parsed);
+    }
   } else if (modül === "kanal") {
     patch.channelEnabled = enabled;
+    if (optKey === "esik" || optKey === "threshold") {
+      const v = parseInt(optVal ?? "4");
+      if (!isNaN(v) && v >= 2) patch.channelThreshold = Math.min(v, 100);
+    }
+    if (optKey === "aksiyon") {
+      const parsed = parseGuardActionInput(optVal);
+      if (!parsed) {
+        await m.reply("❌ Aksiyonları `+` ile ayır: `mute`, `kick`, `ban`, `log`.");
+        return;
+      }
+      patch.channelActions = JSON.stringify(parsed);
+    }
+  }
+
+  if (optKey === "süre" || optKey === "sure" || optKey === "window") {
+    const seconds = Number(optVal);
+    if (Number.isInteger(seconds) && seconds >= 5 && seconds <= 3600) {
+      patch.actionWindowSeconds = seconds;
+    } else {
+      await m.reply("❌ Aksiyon penceresi 5–3600 saniye arasında olmalı.");
+      return;
+    }
   }
 
   await setGuard(m.guildId, patch as Parameters<typeof setGuard>[1]);
@@ -3958,40 +3968,6 @@ async function pfxCekilis(m: Message, args: string[]): Promise<void> {
   );
 }
 
-// ── LEVEL TOGGLE ──────────────────────────────────────────────────────────────
-
-async function pfxLevelToggle(m: Message, args: string[]): Promise<void> {
-  if (!m.guildId || !m.member) return;
-  if (!isOwner(m.author.id) && !m.member.permissions.has("Administrator")) {
-    await m.reply("❌ Bu komutu kullanmak için **Administrator** yetkisine ihtiyacın var."); return;
-  }
-
-  const sub = args[0]?.toLowerCase();
-
-  if (!sub || sub === "durum" || sub === "status") {
-    const enabled = await getLevelEnabled(m.guildId);
-    await m.reply(
-      `⭐ **Level Sistemi Durumu:** ${enabled ? "🟢 Açık" : "🔴 Kapalı"}\n` +
-      `Değiştirmek için: \`level aç\` veya \`level kapat\``
-    );
-    return;
-  }
-
-  if (sub === "aç" || sub === "ac" || sub === "on" || sub === "enable") {
-    await setLevelEnabled(m.guildId, true);
-    await m.reply("🟢 **Level sistemi açıldı!** Artık mesaj atıldıkça XP kazanılacak.");
-    return;
-  }
-
-  if (sub === "kapat" || sub === "off" || sub === "disable") {
-    await setLevelEnabled(m.guildId, false);
-    await m.reply("🔴 **Level sistemi kapatıldı.** Artık XP kazanılmayacak.");
-    return;
-  }
-
-  await m.reply("❌ Kullanım: `level aç` / `level kapat` / `level durum`");
-}
-
 // ── Prefix handler tablosu ────────────────────────────────────────────────────
 
 const prefixHandlers: Record<string, PfxHandler> = {
@@ -4405,39 +4381,6 @@ export async function startBot(): Promise<void> {
     for (const guild of client.guilds.cache.values()) {
       const member = guild.members.cache.get(newUser.id);
       if (member) await syncMemberTagRole(member).catch(() => null);
-    }
-  });
-
-  // ── Ses XP ───────────────────────────────────────────────────────────────
-  client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-    const userId  = newState.member?.id ?? oldState.member?.id;
-    const guildId = newState.guild.id;
-    if (!userId || newState.member?.user.bot) return;
-    const key = `${userId}:${guildId}`;
-
-    if (!oldState.channelId && newState.channelId) {
-      voiceSessions.set(key, Date.now());
-    } else if (oldState.channelId && !newState.channelId) {
-      const start = voiceSessions.get(key);
-      if (!start) return;
-      voiceSessions.delete(key);
-      const minutes = Math.floor((Date.now() - start) / 60_000);
-      if (minutes < 1) return;
-      const result = await handleXp(userId, guildId, newState.guild, minutes * VOICE_XP_PER_MIN).catch(() => null);
-      if (result?.leveledUp) {
-        const ch = newState.guild.systemChannel ?? oldState.channel;
-        if (ch && "send" in ch) {
-          try {
-            const u = await client.users.fetch(userId);
-            const buf = await generateLevelUpCard({
-              username: u.displayName,
-              avatarUrl: u.displayAvatarURL({ extension: "png", size: 256 }),
-              oldLevel: result.oldLevel, newLevel: result.newLevel,
-            });
-            await (ch as TextChannel).send({ content: `${u}`, files: [new AttachmentBuilder(buf, { name: "levelup.png" })] });
-          } catch { /**/ }
-        }
-      }
     }
   });
 
@@ -5204,22 +5147,6 @@ export async function startBot(): Promise<void> {
     if (linkBlocked) return;
     await handleEmoji(message).catch(() => null);
 
-    // XP kazanımı — level sistemi kapalıysa atla
-    const levelEnabled = await getLevelEnabled(message.guildId).catch(() => true);
-    if (!levelEnabled) return;
-    const result = await handleXp(message.author.id, message.guildId, message.guild ?? undefined).catch(() => null);
-    if (result?.leveledUp) {
-      try {
-        const buf = await generateLevelUpCard({
-          username: message.author.displayName,
-          avatarUrl: message.author.displayAvatarURL({ extension: "png", size: 256 }),
-          oldLevel: result.oldLevel, newLevel: result.newLevel,
-        });
-        await sendMessageChannel(message, { content: `${message.author}`, files: [new AttachmentBuilder(buf, { name: "levelup.png" })] });
-      } catch {
-        await sendMessageChannel(message, `🎉 ${message.author} **${result.newLevel}. seviyeye** ulaştı!`).catch(() => null);
-      }
-    }
   });
 
   // ── Stat kanalları periyodik güncelleme (her 10 dakika) ───────────────────
